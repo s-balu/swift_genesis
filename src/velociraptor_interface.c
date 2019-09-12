@@ -157,6 +157,11 @@ struct siminfo {
 
   /*! Do we have other particles? */
   int iother;
+
+  #ifdef VR_NOMASS
+  /*! if saving memory by not storing masses as running uniform box*/
+  double mass_uniform_box;
+  #endif
 };
 
 /**
@@ -243,7 +248,9 @@ void velociraptor_convert_particles_mapper(void *map_data, int nr_gparts,
     swift_parts[i].v[1] = gparts[i].v_full[1] * a_inv;
     swift_parts[i].v[2] = gparts[i].v_full[2] * a_inv;
 
+    #ifndef VR_NOMASS
     swift_parts[i].mass = gravity_get_mass(&gparts[i]);
+    #endif
     swift_parts[i].potential = gravity_get_comoving_potential(&gparts[i]);
 
     swift_parts[i].type = gparts[i].type;
@@ -348,6 +355,10 @@ void velociraptor_init(struct engine *e) {
   } else {
     sim_info.izoomsim = 0;
   }
+
+  #ifdef VR_NOMASS
+  sim_info.mass_uniform_box = gravity_get_mass(&gparts[0]);
+  #endif
 
   /* Tell VELOCIraptor what we have in the simulation */
   sim_info.idarkmatter = (e->total_nr_gparts - e->total_nr_parts > 0);

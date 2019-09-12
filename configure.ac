@@ -1122,6 +1122,21 @@ if test "$enable_dummy_velociraptor" = "yes"; then
   AC_DEFINE(HAVE_DUMMY_VELOCIRAPTOR,1,[The dummy VELOCIraptor library is present.])
 fi
 
+# Enable VR to not store mass per particle since all particles have the same mass
+# Reduces memory foot print.
+AC_ARG_ENABLE([velociraptor-uniform-box],
+   [AS_HELP_STRING([--velociraptor-uniform-box],
+     [Enable VR to not store pass per particle, reducing memory footprint. @<:@yes/no@:>@]
+   )],
+   [enable_velociraptor_uniform_box="$enableval"],
+   [enable_velociraptor_uniform_box="no"]
+
+   AC_CHECK_LIB(
+      [velociraptor_uniform_box],
+      [AC_DEFINE([VR_NOMASS],1,[VR running assuming all particles have the same mass, does not store it per particle.])]
+   )
+)
+
 # Check for floating-point execeptions
 AC_CHECK_FUNC(feenableexcept, AC_DEFINE([HAVE_FE_ENABLE_EXCEPT],[1],
     [Defined if the floating-point exception can be enabled using non-standard GNU functions.]))
@@ -1878,9 +1893,9 @@ case "$with_potential" in
 esac
 
 #  Entropy floor
-AC_ARG_WITH([entropy-floor], 
+AC_ARG_WITH([entropy-floor],
     [AS_HELP_STRING([--with-entropy-floor=<floor>],
-       [entropy floor @<:@none, EAGLE, default: none@:>@] 
+       [entropy floor @<:@none, EAGLE, default: none@:>@]
     )],
     [with_entropy_floor="$withval"],
     [with_entropy_floor="none"]
@@ -1903,10 +1918,10 @@ case "$with_entropy_floor" in
    *)
       AC_MSG_ERROR([Unknown entropy floor model])
    ;;
-esac 
+esac
 
 #  Pressure floor
-AC_ARG_WITH([pressure-floor], 
+AC_ARG_WITH([pressure-floor],
     [AS_HELP_STRING([--with-pressure-floor=<floor>],
        [pressure floor @<:@none, GEAR, default: none@:>@
        The hydro model needs to be compatible.]
@@ -1932,12 +1947,12 @@ case "$with_pressure_floor" in
    *)
       AC_MSG_ERROR([Unknown pressure floor model])
    ;;
-esac 
+esac
 
 #  Star formation
-AC_ARG_WITH([star-formation], 
+AC_ARG_WITH([star-formation],
     [AS_HELP_STRING([--with-star-formation=<sfm>],
-       [star formation @<:@none, EAGLE, GEAR, default: none@:>@] 
+       [star formation @<:@none, EAGLE, GEAR, default: none@:>@]
     )],
     [with_star_formation="$withval"],
     [with_star_formation="none"]
@@ -1963,7 +1978,7 @@ case "$with_star_formation" in
    *)
       AC_MSG_ERROR([Unknown star formation model])
    ;;
-esac 
+esac
 
 #  Gravity multipole order
 AC_ARG_WITH([multipole-order],
