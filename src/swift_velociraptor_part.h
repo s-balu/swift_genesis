@@ -20,6 +20,7 @@
 #define SWIFT_VELOCIRAPTOR_PART_H
 
 #include "part_type.h"
+#include "chemistry.h"
 
 /**
  * @brief SWIFT/VELOCIraptor particle.
