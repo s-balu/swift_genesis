@@ -3376,6 +3376,10 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
   units_init_default(e->snapshot_units, params, "Snapshots", internal_units);
   e->snapshot_output_count = 0;
   e->stf_output_count = 0;
+  if (e->num_extra_stf_outputs){
+    for (int i=0;i<e->num_extra_stf_outputs;i++) e->stf_output_count_extra[i] = 0;
+  }
+
   e->dt_min = parser_get_param_double(params, "TimeIntegration:dt_min");
   e->dt_max = parser_get_param_double(params, "TimeIntegration:dt_max");
   e->dt_max_RMS_displacement = FLT_MAX;
@@ -3467,6 +3471,21 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
         params, "StructureFinding:scale_factor_first", 0.1);
     e->delta_time_stf =
         parser_get_opt_param_double(params, "StructureFinding:delta_time", -1.);
+
+    /* additions for extra calls to VELOCIraptor to different directories */
+    /* possibly with different cadence and/or different configs */
+    /* need to add error checks if there are not enough outputs listed */
+    e->num_extra_stf_outputs = parser_get_opt_param_int(params, "StructureFinding:number_of_extra_stf_outputs",0);
+    if (e->num_extra_stf_outputs) {
+        char stringtemp[500];
+        for (int i=0;i<e->num_extra_stf_outputs;i++) {
+            sprintf(stringtemp, "StructureFinding:basename_extra_%d", i);
+            parser_get_param_string(params, stringtemp, e->stf_base_name_extra[i]);
+            sprintf(stringtemp, "StructureFinding:config_file_name_extra_%d", i);
+            parser_get_param_string(params, stringtemp, e->stf_config_file_name_extra[i]);
+        }
+    }
+
   }
 
   /* Initialise FoF calls frequency. */
@@ -4418,6 +4437,79 @@ void engine_compute_next_stf_time(struct engine *e) {
 }
 
 /**
+ * @brief Computes the next time (on the time line) for structure finding
+ * of the extra request stf dumps if any.
+ * @param e The #engine.
+ */
+void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
+    if (e->num_extra_stf_outputs<1) {
+        return;
+    }
+  for (int i=0;i<e->num_extra_stf_outputs; i++) {
+      /* Do output_list file case */
+      if (e->output_list_stf_extra[i]) {
+        output_list_read_next_time(e->output_list_stf_extra[i], e, "stf", &e->ti_next_stf_extra[i]);
+        return;
+      }
+
+      /* Find upper-bound on last output */
+      double time_end;
+      if (e->policy & engine_policy_cosmology)
+        time_end = e->cosmology->a_end * e->delta_time_stf_extra[i];
+      else
+        time_end = e->time_end + e->delta_time_stf_extra[i];
+
+      /* Find next snasphot above current time */
+      double time;
+      if (e->policy & engine_policy_cosmology)
+        time = e->a_first_stf_output_extra[i];
+      else
+        time = e->time_first_stf_output_extra[i];
+
+      int found_stf_time = 0;
+      while (time < time_end) {
+
+        /* Output time on the integer timeline */
+        if (e->policy & engine_policy_cosmology)
+          e->ti_next_stf_extra[i] = log(time / e->cosmology->a_begin) / e->time_base;
+        else
+          e->ti_next_stf_extra[i] = (time - e->time_begin) / e->time_base;
+
+        /* Found it? */
+        if (e->ti_next_stf_extra[i] > e->ti_current) {
+          found_stf_time = 1;
+          break;
+        }
+
+        if (e->policy & engine_policy_cosmology)
+          time *= e->delta_time_stf_extra[i];
+        else
+          time += e->delta_time_stf_extra[i];
+      }
+
+      /* Deal with last snapshot */
+      if (!found_stf_time) {
+        e->ti_next_stf_extra[i] = -1;
+        if (e->verbose) message("No further output time.");
+      } else {
+
+        /* Be nice, talk... */
+        if (e->policy & engine_policy_cosmology) {
+          const float next_stf_time =
+              exp(e->ti_next_stf_extra[i] * e->time_base) * e->cosmology->a_begin;
+          if (e->verbose)
+            message("Next VELOCIraptor time for extra output set %d is set to a=%e.", i, next_stf_time);
+        } else {
+          const float next_stf_time = e->ti_next_stf_extra[i] * e->time_base + e->time_begin;
+          if (e->verbose)
+            message("Next VELOCIraptor time for extra output set %d set to t=%e.", i, next_stf_time);
+        }
+      }
+  }
+}
+
+
+/**
  * @brief Computes the next time (on the time line) for FoF black holes seeding
  *
  * @param e The #engine.
@@ -4523,6 +4615,23 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
     else
       e->time_first_stf_output = stf_time_first;
   }
+
+  /* Deal with stf extra output lists */
+  if (e->num_extra_stf_outputs) {
+      for (int i=0;i<e->num_extra_stf_outputs;i++) {
+          e->output_list_stf_extra[i] = NULL;
+          output_list_init(&e->output_list_stf_extra[i], e, "StructureFinding",
+                           &e->delta_time_stf_extra[i], &stf_time_first);
+
+          if (e->output_list_stf_extra[i]) {
+            if (e->policy & engine_policy_cosmology)
+              e->a_first_stf_output_extra[i] = stf_time_first;
+            else
+              e->time_first_stf_output_extra[i] = stf_time_first;
+          }
+      }
+    }
+
 }
 
 /**
@@ -4678,6 +4787,11 @@ void engine_clean(struct engine *e, const int fof) {
   output_list_clean(&e->output_list_snapshots);
   output_list_clean(&e->output_list_stats);
   output_list_clean(&e->output_list_stf);
+  if (e->num_extra_stf_outputs) {
+    for (int i=0;i<e->num_extra_stf_outputs;i++) {
+      output_list_clean(&e->output_list_stf_extra[i]);
+    }
+  }
 
   swift_free("links", e->links);
 #if defined(WITH_LOGGER)
@@ -4746,6 +4860,11 @@ void engine_struct_dump(struct engine *e, FILE *stream) {
   if (e->output_list_stats)
     output_list_struct_dump(e->output_list_stats, stream);
   if (e->output_list_stf) output_list_struct_dump(e->output_list_stf, stream);
+  if (e->num_extra_stf_outputs) {
+    for (int i=0;i<e->num_extra_stf_outputs;i++) {
+      if (e->output_list_stf_extra[i]) output_list_struct_dump(e->output_list_stf_extra[i], stream);
+    }
+  }
 }
 
 /**
@@ -4888,6 +5007,16 @@ void engine_struct_restore(struct engine *e, FILE *stream) {
         (struct output_list *)malloc(sizeof(struct output_list));
     output_list_struct_restore(output_list_stf, stream);
     e->output_list_stf = output_list_stf;
+  }
+  if (e->num_extra_stf_outputs) {
+    for (int i=0;i<e->num_extra_stf_outputs;i++) {
+      if (e->output_list_stf_extra[i]) {
+        struct output_list *output_list_stf =
+            (struct output_list *)malloc(sizeof(struct output_list));
+        output_list_struct_restore(output_list_stf, stream);
+        e->output_list_stf_extra[i] = output_list_stf;
+      }
+    }
   }
 
 #ifdef EOS_PLANETARY
