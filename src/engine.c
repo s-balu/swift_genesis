@@ -3483,6 +3483,12 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
             parser_get_param_string(params, stringtemp, e->stf_base_name_extra[i]);
             sprintf(stringtemp, "StructureFinding:config_file_name_extra_%d", i);
             parser_get_param_string(params, stringtemp, e->stf_config_file_name_extra[i]);
+            e->time_first_stf_output_extra[i] =
+                parser_get_opt_param_double(params, "StructureFinding:time_first_extra_%d", 0.);
+            e->a_first_stf_output_extra[i] = parser_get_opt_param_double(
+                params, "StructureFinding:scale_factor_first_extra_%d", 0.1);
+            e->delta_time_stf_extra[i] =
+                parser_get_opt_param_double(params, "StructureFinding:delta_time_extra_%d", -1.);
         }
     }
 
