@@ -2156,6 +2156,11 @@ void engine_step(struct engine *e) {
   struct clocks_time time1, time2;
   clocks_gettime(&time1);
 
+#if defined(SWIFT_MPIUSE_REPORTS) && defined(WITH_MPI)
+  /* We may want to compare times across ranks, so make sure all steps start
+   * at the same time, just different ticks. */
+  MPI_Barrier(MPI_COMM_WORLD);
+#endif
   e->tic_step = getticks();
 
   if (e->nodeID == 0) {
@@ -3679,6 +3684,11 @@ void engine_config(int restart, int fof, struct engine *e,
                                              engine_maxproxies)) == NULL)
       error("Failed to allocate memory for proxies.");
     e->nr_proxies = 0;
+
+    /* Use synchronous MPI sends and receives when redistributing. */
+    e->syncredist =
+        parser_get_opt_param_int(params, "DomainDecomposition:synchronous", 0);
+
 #endif
   }
 
