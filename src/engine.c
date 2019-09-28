@@ -2374,13 +2374,15 @@ void engine_check_for_dumps(struct engine *e) {
 
   const int with_cosmology = (e->policy & engine_policy_cosmology);
   const int with_stf = (e->policy & engine_policy_structure_finding);
+  int iextra = -1;
 
   /* What kind of output are we getting? */
   enum output_type {
     output_none,
     output_snapshot,
     output_statistics,
-    output_stf
+    output_stf,
+    output_stf_extra
   };
 
   /* What kind of output do we want? And at which time ?
@@ -2403,7 +2405,7 @@ void engine_check_for_dumps(struct engine *e) {
       ti_output = e->ti_next_snapshot;
       type = output_snapshot;
     }
-  }
+  } 
 
   /* Do we want to perform structure finding? */
   if (with_stf) {
@@ -2412,6 +2414,18 @@ void engine_check_for_dumps(struct engine *e) {
         ti_output = e->ti_next_stf;
         type = output_stf;
       }
+    }
+    if (e->num_extra_stf_outputs) {
+        for (int i = 0; i < e->num_extra_stf_outputs; i++) {
+            if (e->ti_end_min > e->ti_next_stf_extra[i] && e->ti_next_stf_extra[i] > 0) {
+              if (e->ti_next_stf_extra[i] < ti_output) {
+                ti_output = e->ti_next_stf_extra[i];
+                iextra = i;
+                type = output_stf_extra;
+                break;
+              }
+            }
+        }
     }
   }
 
@@ -2497,6 +2511,21 @@ void engine_check_for_dumps(struct engine *e) {
             "the interface!");
 #endif
         break;
+
+        case output_stf_extra:
+
+  #ifdef HAVE_VELOCIRAPTOR
+          /* Unleash the raptor! */
+          velociraptor_invoke(e, -iextra-1);
+          e->step_props |= engine_step_prop_stf;
+          /* ... and find the next output time */
+          engine_compute_next_stf_time_extra_outputs(e);
+  #else
+          error(
+              "Asking for a VELOCIraptor output but SWIFT was compiled without "
+              "the interface!");
+  #endif
+          break;
 
       default:
         error("Invalid dump type");
@@ -3393,6 +3422,9 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
       parser_get_param_double(params, "Statistics:delta_time");
   e->ti_next_stats = 0;
   e->ti_next_stf = 0;
+  if (e->num_extra_stf_outputs){
+    for (int i=0;i<e->num_extra_stf_outputs;i++) e->ti_next_stf_extra[i] = 0;
+  }
   e->ti_next_fof = 0;
   e->verbose = verbose;
   e->wallclock_time = 0.f;
@@ -3483,12 +3515,15 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
             parser_get_param_string(params, stringtemp, e->stf_base_name_extra[i]);
             sprintf(stringtemp, "StructureFinding:config_file_name_extra_%d", i);
             parser_get_param_string(params, stringtemp, e->stf_config_file_name_extra[i]);
+            sprintf(stringtemp, "StructureFinding:time_first_extra_%d",i);
             e->time_first_stf_output_extra[i] =
-                parser_get_opt_param_double(params, "StructureFinding:time_first_extra_%d", 0.);
+                parser_get_opt_param_double(params, stringtemp, 0.);
+            sprintf(stringtemp, "StructureFinding:scale_factor_first_extra_%d",i);
             e->a_first_stf_output_extra[i] = parser_get_opt_param_double(
-                params, "StructureFinding:scale_factor_first_extra_%d", 0.1);
+                params, stringtemp, 0.1);
+            sprintf(stringtemp, "StructureFinding:delta_time_extra_%d",i);
             e->delta_time_stf_extra[i] =
-                parser_get_opt_param_double(params, "StructureFinding:delta_time_extra_%d", -1.);
+                parser_get_opt_param_double(params, stringtemp, -1.);
         }
     }
 
@@ -3973,6 +4008,9 @@ void engine_config(int restart, int fof, struct engine *e,
     /* Find the time of the first stf output */
     if (e->policy & engine_policy_structure_finding) {
       engine_compute_next_stf_time(e);
+      if (e->num_extra_stf_outputs) {
+         engine_compute_next_stf_time_extra_outputs(e); 
+      }
     }
 
     /* Find the time of the first stf output */
@@ -4386,12 +4424,11 @@ void engine_compute_next_stf_time(struct engine *e) {
     output_list_read_next_time(e->output_list_stf, e, "stf", &e->ti_next_stf);
     return;
   }
-
   /* Find upper-bound on last output */
   double time_end;
   if (e->policy & engine_policy_cosmology)
     time_end = e->cosmology->a_end * e->delta_time_stf;
-  else
+  else 
     time_end = e->time_end + e->delta_time_stf;
 
   /* Find next snasphot above current time */
@@ -4421,7 +4458,6 @@ void engine_compute_next_stf_time(struct engine *e) {
     else
       time += e->delta_time_stf;
   }
-
   /* Deal with last snapshot */
   if (!found_stf_time) {
     e->ti_next_stf = -1;
@@ -4451,11 +4487,11 @@ void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
     if (e->num_extra_stf_outputs<1) {
         return;
     }
-  for (int i=0;i<e->num_extra_stf_outputs; i++) {
+    for (int i=0;i<e->num_extra_stf_outputs; i++) {
       /* Do output_list file case */
       if (e->output_list_stf_extra[i]) {
         output_list_read_next_time(e->output_list_stf_extra[i], e, "stf", &e->ti_next_stf_extra[i]);
-        return;
+        continue;
       }
 
       /* Find upper-bound on last output */
