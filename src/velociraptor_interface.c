@@ -657,6 +657,10 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
     snapnum = e->stf_output_count_extra[iextraoutput];
   }
 
+  /* What should the filename be? */
+  snprintf(outputFileName, PARSER_MAX_LINE_SIZE + 128, "%s_%04i.VELOCIraptor",
+           e->stf_base_name, snapnum);
+
   tic = getticks();
 
   /* Allocate and populate an array of swift_vel_parts to be passed to
@@ -771,6 +775,9 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
     iextraoutput = -linked_with_snap - 1;
     e->stf_output_count_extra[iextraoutput]++;
   }
+
+  /* Record we have ran stf this timestep */
+  e->stf_this_timestep = 1;
 
 #else
   error("SWIFT not configure to run with VELOCIraptor.");
