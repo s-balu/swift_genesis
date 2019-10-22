@@ -6,6 +6,7 @@
 
 /* Local includes. */
 #include <mpi.h>
+#include <hdf5_hl.h>
 
 #include "error.h"
 #include "threadpool.h"
@@ -71,15 +72,14 @@ __attribute__((always_inline)) INLINE static void CIC_set(
                value * dx * dy * dz);
 }
 
-// TODO(smutch): Make this available from `mesh_gravity.c`
 /**
  * @brief Assigns a given #gpart property to a grid using the CIC method.
  *
  * @param gp The #gpart.
- * @param prop_offset The offset of the #gpart struct property to be gridded.
- * @param rho The density mesh.
- * @param dim the size of the mesh along each axis.
- * @param fac The width of a mesh cell.
+ * @param prop_offset The byte offset of the #gpart struct property to be gridded.
+ * @param grid The grid.
+ * @param dim the size of the grid along each axis.
+ * @param fac The width of the grid cells in each dimension.
  * @param box_size The dimensions of the simulation box.
  */
 __attribute__((always_inline)) INLINE static void part_to_grid_CIC(
@@ -113,12 +113,16 @@ __attribute__((always_inline)) INLINE static void part_to_grid_CIC(
   if (k < 0 || k >= dim) error("Invalid gpart position in z");
 #endif
 
-  const double val = (prop_offset < 0) ? 1.0 : *(double*)(gp + prop_offset);
+  const double val = (prop_offset < 0) ? 1.0 : *(double*)((char *)gp + prop_offset);
 
   /* CIC ! */
   CIC_set(grid, dim, i, j, k, tx, ty, tz, dx, dy, dz, val);
 }
 
+/**
+ * @brief Shared information about the grid to be used by all the threads in the
+ * pool.
+ */
 struct gridding_extra_data {
   double cell_size[3];
   double box_size[3];
@@ -128,6 +132,13 @@ struct gridding_extra_data {
   int n_grid_points;
 };
 
+/**
+ * @brief Threadpool mapper function for the grid CIC assignment.
+ *
+ * @param gparts_v The #gpart array recast as a void pointer
+ * @param N The number of #gparts
+ * @param extra_data_v Extra data to be passed to the gridding
+ */
 static void construct_grid_CIC_mapper(void* restrict gparts_v, int N,
                                       void* restrict extra_data_v) {
 
@@ -150,6 +161,14 @@ static void construct_grid_CIC_mapper(void* restrict gparts_v, int N,
   }
 }
 
+/**
+ * @brief Find the grid index for a #gpart position.
+ *
+ * @param gp The #gpart.
+ * @param cell_size The size of each cell.
+ * @param grid_dim The dimensionality of the grid.
+ * @param n_grid_points The total number of points (cells) in the grid (used for checking).
+ */
 __attribute__((always_inline)) INLINE static int part_to_grid_index(
     const struct gpart* gp, const double cell_size[3], const double grid_dim,
     const int n_grid_points) {
@@ -165,6 +184,13 @@ __attribute__((always_inline)) INLINE static int part_to_grid_index(
   return index;
 }
 
+/**
+ * @brief Threadpool mapper function for the grid NGP assignment.
+ *
+ * @param gparts_v The #gpart array recast as a void pointer
+ * @param N The number of #gpart
+ * @param extra_data_v The #gridding_extra_data data to be passed to the gridding recast as a void pointer
+ */
 static void construct_grid_NGP_mapper(void* restrict gparts_v, int N,
                                       void* restrict extra_data_v) {
 
@@ -181,11 +207,20 @@ static void construct_grid_NGP_mapper(void* restrict gparts_v, int N,
   for (int ii = 0; ii < N; ++ii) {
     const struct gpart* gp = &(gparts[ii]);
     int index = part_to_grid_index(gp, cell_size, grid_dim, n_grid_points);
-    const double val = (prop_offset < 0) ? 1.0 : *(double*)(gp + prop_offset);
+    const double val = (prop_offset < 0) ? 1.0 : *(double*)((char *)gp + prop_offset);
     atomic_add_d(&(grid[index]), val);
   }
 }
 
+/**
+ * @brief Construct and write dark matter density and velocity grids.
+ *
+ * @param e The #engine.
+ * @param Npart The number of #gpart
+ * @param h_file The output HDF5 file handle.
+ * @param internal_units The #unit_system used internally.
+ * @param snapshot_units The #unit_system used in the snapshots.
+ */
 void darkmatter_write_grids(struct engine* e, const size_t Npart,
                             const hid_t h_file,
                             const struct unit_system* internal_units,
@@ -207,9 +242,7 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   if (swift_memalign("writegrid", (void**)&grid, IO_BUFFER_ALIGNMENT,
                      n_grid_points * sizeof(double)) != 0)
     error("Failed to allocate output DM grids!");
-  for (int ii = 0; ii < n_grid_points; ++ii) {
-    grid[ii] = 0.0;
-  }
+  memset(grid, 0, n_grid_points * sizeof(double));
 
   /* Array to be used to store particle counts at all grid points. */
   double* point_counts = NULL;
@@ -217,14 +250,18 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
                      n_grid_points * sizeof(double)) != 0) {
     error("Failed to allocate point counts grids!");
   }
-  bzero(point_counts, n_grid_points * sizeof(double));
+  memset(point_counts, 0, n_grid_points * sizeof(double));
 
   /* Calculate information for the write that is not dependent on the property
      being written. */
 
-  hid_t h_grp = H5Gcreate(h_file, "/PartType1/Grids", H5P_DEFAULT, H5P_DEFAULT,
+  const char group_name[] = {"/PartType1/Grids"};
+  hid_t h_grp = H5Gcreate(h_file, group_name, H5P_DEFAULT, H5P_DEFAULT,
                           H5P_DEFAULT);
   if (h_grp < 0) error("Error while creating dark matter grids group.");
+    
+  /* attach an attribute with the gridding type */
+  H5LTset_attribute_string(h_file, group_name, "gridding_method", e->snapshot_grid_method);
 
   int i_rank, n_ranks;
   MPI_Comm_rank(MPI_COMM_WORLD, &i_rank);
@@ -271,9 +308,9 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
    * point_counts available to do the averaging of the velocities. */
   enum grid_types { DENSITY, VELOCITY_X, VELOCITY_Y, VELOCITY_Z };
 
-  void* construct_grid_mapper = construct_grid_NGP_mapper;
+  void (*construct_grid_mapper)(void* restrict, int, void* restrict) = &construct_grid_NGP_mapper;
   if (strncmp(e->snapshot_grid_method, "CIC", 3) == 0) {
-    construct_grid_mapper = construct_grid_CIC_mapper;
+    construct_grid_mapper = &construct_grid_CIC_mapper;
   } else if (strncmp(e->snapshot_grid_method, "NGP", 3) != 0) {
     message(
         "WARNING: Unknown snapshot gridding method (Snapshots:grid_method). "
@@ -287,35 +324,26 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       case DENSITY:
         extra_data.grid = point_counts;
         extra_data.prop_offset = -1;
-        threadpool_map((struct threadpool*)&e->threadpool,
-                       construct_grid_mapper, gparts, Npart,
-                       sizeof(struct gpart), 0, (void*)&extra_data);
         break;
 
       case VELOCITY_X:
         extra_data.grid = grid;
         extra_data.prop_offset = offsetof(struct gpart, v_full[0]);
-        threadpool_map((struct threadpool*)&e->threadpool,
-                       construct_grid_mapper, gparts, Npart,
-                       sizeof(struct gpart), 0, (void*)&extra_data);
         break;
 
       case VELOCITY_Y:
         extra_data.grid = grid;
         extra_data.prop_offset = offsetof(struct gpart, v_full[1]);
-        threadpool_map((struct threadpool*)&e->threadpool,
-                       construct_grid_mapper, gparts, Npart,
-                       sizeof(struct gpart), 0, (void*)&extra_data);
         break;
 
       case VELOCITY_Z:
         extra_data.grid = grid;
         extra_data.prop_offset = offsetof(struct gpart, v_full[2]);
-        threadpool_map((struct threadpool*)&e->threadpool,
-                       construct_grid_mapper, gparts, Npart,
-                       sizeof(struct gpart), 0, (void*)&extra_data);
         break;
     }
+    threadpool_map((struct threadpool*)&e->threadpool,
+        construct_grid_mapper, gparts, Npart,
+        sizeof(struct gpart), 0, (void*)&extra_data);
 
     /* Do any necessary conversions */
     switch (grid_type) {
@@ -323,7 +351,7 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       double unit_conv_factor;
       case DENSITY:
         /* reduce the grid */
-        MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_INT,
+        MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_DOUBLE,
                       MPI_SUM, MPI_COMM_WORLD);
 
         /* convert n_particles to density */
