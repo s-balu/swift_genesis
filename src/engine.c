@@ -51,6 +51,7 @@
 /* Local headers. */
 #include "active.h"
 #include "atomic.h"
+#include "black_holes.h"
 #include "cell.h"
 #include "chemistry.h"
 #include "clocks.h"
@@ -83,7 +84,6 @@
 #include "sort_part.h"
 #include "star_formation.h"
 #include "star_formation_logger.h"
-#include "star_formation_logger_struct.h"
 #include "stars_io.h"
 #include "statistics.h"
 #include "timers.h"
@@ -117,7 +117,8 @@ const char *engine_policy_names[] = {"none",
                                      "feedback",
                                      "black holes",
                                      "fof search",
-                                     "time-step limiter"};
+                                     "time-step limiter",
+                                     "time-step sync"};
 
 /** The rank of the engine as a global variable (for messages). */
 int engine_rank;
@@ -594,7 +595,6 @@ void engine_exchange_strays(struct engine *e, const size_t offset_parts,
 
   /* Reallocate the particle arrays if necessary */
   if (offset_parts + count_parts_in > s->size_parts) {
-    message("re-allocating parts array.");
     s->size_parts = (offset_parts + count_parts_in) * engine_parts_size_grow;
     struct part *parts_new = NULL;
     struct xpart *xparts_new = NULL;
@@ -619,7 +619,6 @@ void engine_exchange_strays(struct engine *e, const size_t offset_parts,
   }
 
   if (offset_sparts + count_sparts_in > s->size_sparts) {
-    message("re-allocating sparts array.");
     s->size_sparts = (offset_sparts + count_sparts_in) * engine_parts_size_grow;
     struct spart *sparts_new = NULL;
     if (swift_memalign("sparts", (void **)&sparts_new, spart_align,
@@ -638,7 +637,6 @@ void engine_exchange_strays(struct engine *e, const size_t offset_parts,
   }
 
   if (offset_bparts + count_bparts_in > s->size_bparts) {
-    message("re-allocating bparts array.");
     s->size_bparts = (offset_bparts + count_bparts_in) * engine_parts_size_grow;
     struct bpart *bparts_new = NULL;
     if (swift_memalign("bparts", (void **)&bparts_new, bpart_align,
@@ -657,7 +655,6 @@ void engine_exchange_strays(struct engine *e, const size_t offset_parts,
   }
 
   if (offset_gparts + count_gparts_in > s->size_gparts) {
-    message("re-allocating gparts array.");
     s->size_gparts = (offset_gparts + count_gparts_in) * engine_parts_size_grow;
     struct gpart *gparts_new = NULL;
     if (swift_memalign("gparts", (void **)&gparts_new, gpart_align,
@@ -1353,7 +1350,7 @@ int engine_estimate_nr_tasks(const struct engine *e) {
 #endif
 #endif
   }
-  if (e->policy & engine_policy_limiter) {
+  if (e->policy & engine_policy_timestep_limiter) {
     n1 += 18;
     n2 += 1;
   }
@@ -1778,6 +1775,7 @@ void engine_skip_force_and_kick(struct engine *e) {
         t->type == task_type_kick1 || t->type == task_type_kick2 ||
         t->type == task_type_timestep ||
         t->type == task_type_timestep_limiter ||
+        t->type == task_type_timestep_sync ||
         t->subtype == task_subtype_force ||
         t->subtype == task_subtype_limiter || t->subtype == task_subtype_grav ||
         t->type == task_type_end_hydro_force ||
@@ -1832,7 +1830,7 @@ void engine_skip_drift(struct engine *e) {
 
     /* Skip everything that moves the particles */
     if (t->type == task_type_drift_part || t->type == task_type_drift_gpart ||
-        t->type == task_type_drift_spart)
+        t->type == task_type_drift_spart || t->type == task_type_drift_bpart)
       t->skip = 1;
   }
 
@@ -2167,8 +2165,8 @@ void engine_step(struct engine *e) {
 
     /* Print some information to the screen */
     printf(
-        "  %6d %14e %12.7f %12.7f %14e %4d %4d %12lld %12lld %12lld %12lld "
-        "%21.3f %6d\n",
+        "  %6d %14e %12.7f %12.7f %14e %4d %4d %12lld %12lld %12lld "
+        "%12lld %21.3f %6d\n",
         e->step, e->time, e->cosmology->a, e->cosmology->z, e->time_step,
         e->min_active_bin, e->max_active_bin, e->updates, e->g_updates,
         e->s_updates, e->b_updates, e->wallclock_time, e->step_props);
@@ -2182,7 +2180,11 @@ void engine_step(struct engine *e) {
                                               e->cosmology->a, e->cosmology->z,
                                               e->sfh, e->step);
 
+#ifdef SWIFT_DEBUG_CHECKS
       fflush(e->sfh_logger);
+#else
+      if (e->step % 32 == 0) fflush(e->sfh_logger);
+#endif
     }
 
     if (!e->restarting)
@@ -2388,6 +2390,7 @@ void engine_check_for_dumps(struct engine *e) {
    * before the next time-step */
   enum output_type type = output_none;
   integertime_t ti_output = max_nr_timesteps;
+  e->stf_this_timestep = 0;
 
   /* Save some statistics ? */
   if (e->ti_end_min > e->ti_next_stats && e->ti_next_stats > 0) {
@@ -2440,7 +2443,7 @@ void engine_check_for_dumps(struct engine *e) {
       case output_snapshot:
 
         /* Do we want a corresponding VELOCIraptor output? */
-        if (with_stf && e->snapshot_invoke_stf) {
+        if (with_stf && e->snapshot_invoke_stf && !e->stf_this_timestep) {
 
 #ifdef HAVE_VELOCIRAPTOR
           velociraptor_invoke(e, /*linked_with_snap=*/1);
@@ -2461,7 +2464,7 @@ void engine_check_for_dumps(struct engine *e) {
 #endif
 
         /* Free the memory allocated for VELOCIraptor i/o. */
-        if (with_stf && e->snapshot_invoke_stf) {
+        if (with_stf && e->snapshot_invoke_stf && e->s->gpart_group_data) {
 #ifdef HAVE_VELOCIRAPTOR
           swift_free("gpart_group_data", e->s->gpart_group_data);
           e->s->gpart_group_data = NULL;
@@ -2486,8 +2489,10 @@ void engine_check_for_dumps(struct engine *e) {
 
 #ifdef HAVE_VELOCIRAPTOR
         /* Unleash the raptor! */
-        velociraptor_invoke(e, /*linked_with_snap=*/0);
-        e->step_props |= engine_step_prop_stf;
+        if (!e->stf_this_timestep) {
+          velociraptor_invoke(e, /*linked_with_snap=*/0);
+          e->step_props |= engine_step_prop_stf;
+        }
 
         /* ... and find the next output time */
         engine_compute_next_stf_time(e);
@@ -3407,6 +3412,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
   e->chemistry = chemistry;
   e->fof_properties = fof_properties;
   e->parameter_file = params;
+  e->stf_this_timestep = 0;
 #ifdef WITH_MPI
   e->cputime_last_step = 0;
   e->last_repartition = 0;
@@ -4055,38 +4061,32 @@ void engine_config(int restart, int fof, struct engine *e,
 
     /* Overwrite the constants for the scheduler */
     space_maxsize = parser_get_opt_param_int(params, "Scheduler:cell_max_size",
-                                             space_maxsize_default);
-    space_subsize_pair_hydro =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_pair_hydro",
-                                 space_subsize_pair_hydro_default);
-    space_subsize_self_hydro =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_self_hydro",
-                                 space_subsize_self_hydro_default);
-    space_subsize_pair_stars =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_pair_stars",
-                                 space_subsize_pair_stars_default);
-    space_subsize_self_stars =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_self_stars",
-                                 space_subsize_self_stars_default);
-    space_subsize_pair_grav =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_pair_grav",
-                                 space_subsize_pair_grav_default);
-    space_subsize_self_grav =
-        parser_get_opt_param_int(params, "Scheduler:cell_sub_size_self_grav",
-                                 space_subsize_self_grav_default);
+                                             space_maxsize);
+    space_subsize_pair_hydro = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_pair_hydro", space_subsize_pair_hydro);
+    space_subsize_self_hydro = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_self_hydro", space_subsize_self_hydro);
+    space_subsize_pair_stars = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_pair_stars", space_subsize_pair_stars);
+    space_subsize_self_stars = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_self_stars", space_subsize_self_stars);
+    space_subsize_pair_grav = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_pair_grav", space_subsize_pair_grav);
+    space_subsize_self_grav = parser_get_opt_param_int(
+        params, "Scheduler:cell_sub_size_self_grav", space_subsize_self_grav);
     space_splitsize = parser_get_opt_param_int(
-        params, "Scheduler:cell_split_size", space_splitsize_default);
+        params, "Scheduler:cell_split_size", space_splitsize);
     space_subdepth_diff_grav =
         parser_get_opt_param_int(params, "Scheduler:cell_subdepth_diff_grav",
                                  space_subdepth_diff_grav_default);
     space_extra_parts = parser_get_opt_param_int(
-        params, "Scheduler:cell_extra_parts", space_extra_parts_default);
+        params, "Scheduler:cell_extra_parts", space_extra_parts);
     space_extra_sparts = parser_get_opt_param_int(
-        params, "Scheduler:cell_extra_sparts", space_extra_sparts_default);
+        params, "Scheduler:cell_extra_sparts", space_extra_sparts);
     space_extra_gparts = parser_get_opt_param_int(
-        params, "Scheduler:cell_extra_gparts", space_extra_gparts_default);
+        params, "Scheduler:cell_extra_gparts", space_extra_gparts);
     space_extra_bparts = parser_get_opt_param_int(
-        params, "Scheduler:cell_extra_bparts", space_extra_bparts_default);
+        params, "Scheduler:cell_extra_bparts", space_extra_bparts);
 
     engine_max_parts_per_ghost =
         parser_get_opt_param_int(params, "Scheduler:engine_max_parts_per_ghost",
