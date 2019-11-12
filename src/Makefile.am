@@ -33,7 +33,7 @@ MPI_FLAGS = -DWITH_MPI $(PARMETIS_INCS) $(METIS_INCS)
 
 # Build the libswiftsim library and a convenience library just for the gravity tasks
 lib_LTLIBRARIES = libswiftsim.la
-noinst_LTLIBRARIES = libgrav.la 
+noinst_LTLIBRARIES = libgrav.la
 # Build a MPI-enabled version too?
 if HAVEMPI
 lib_LTLIBRARIES += libswiftsim_mpi.la
@@ -57,7 +57,7 @@ include_HEADERS = space.h runner.h queue.h task.h lock.h cell.h part.h const.h \
     pressure_floor.h pressure_floor_struct.h pressure_floor_iact.h \
     velociraptor_struct.h velociraptor_io.h random.h memuse.h mpiuse.h memuse_rnodes.h \
     black_holes.h black_holes_io.h black_holes_properties.h black_holes_struct.h \
-    feedback.h feedback_struct.h feedback_properties.h \
+    feedback.h feedback_struct.h feedback_properties.h task_order.h \
 	darkmatter_write_grids.h
 
 # source files for EAGLE cooling
@@ -73,7 +73,7 @@ EAGLE_FEEDBACK_SOURCES += feedback/EAGLE/feedback.c
 endif
 
 # Common source files
-AM_SOURCES = space.c runner_main.c runner_doiact_hydro.c \
+AM_SOURCES = space.c runner_main.c runner_doiact_hydro.c runner_doiact_limiter.c \
     runner_doiact_stars.c runner_doiact_black_holes.c runner_ghost.c runner_recv.c \
     runner_sort.c runner_drift.c runner_black_holes.c runner_time_integration.c \
     runner_doiact_hydro_vec.c runner_others.c\
@@ -98,10 +98,10 @@ nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h
 		 gravity_iact.h kernel_long_gravity.h vector.h cache.h \
 	         runner_doiact_nosort.h runner_doiact_hydro.h runner_doiact_stars.h runner_doiact_black_holes.h runner_doiact_grav.h \
                  runner_doiact_functions_hydro.h runner_doiact_functions_stars.h runner_doiact_functions_black_holes.h \
-		 units.h intrinsics.h minmax.h \
+		 runner_doiact_functions_limiter.h runner_doiact_limiter.h units.h intrinsics.h minmax.h \
                  kick.h timestep.h drift.h adiabatic_index.h io_properties.h dimension.h part_type.h periodic.h memswap.h \
-                 dump.h logger.h sign.h logger_io.h timestep_limiter.h hashmap.h \
-		 gravity.h gravity_io.h gravity_cache.h \
+                 timestep_limiter.h timestep_limiter_iact.h timestep_sync.h timestep_sync_part.h timestep_limiter_struct.h \
+                 dump.h logger.h sign.h logger_io.h hashmap.h gravity.h gravity_io.h gravity_cache.h \
 		 gravity/Default/gravity.h gravity/Default/gravity_iact.h gravity/Default/gravity_io.h \
 		 gravity/Default/gravity_debug.h gravity/Default/gravity_part.h  \
 		 gravity/Potential/gravity.h gravity/Potential/gravity_iact.h gravity/Potential/gravity_io.h \
@@ -240,12 +240,13 @@ nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h
                  black_holes/EAGLE/black_holes_struct.h \
 		 pressure_floor/GEAR/pressure_floor.h pressure_floor/none/pressure_floor.h \
 		 pressure_floor/GEAR/pressure_floor_iact.h pressure_floor/none/pressure_floor_iact.h \
-		 pressure_floor/GEAR/pressure_floor_struct.h pressure_floor/none/pressure_floor_struct.h
+		 pressure_floor/GEAR/pressure_floor_struct.h pressure_floor/none/pressure_floor_struct.h \
+	         task_order/GEAR/task_order.h task_order/EAGLE/task_order.h task_order/none/task_order.h
 
 
 # Sources and special flags for the gravity library
 libgrav_la_SOURCES = runner_doiact_grav.c
-libgrav_la_CFLAGS = $(AM_CFLAGS) $(GRAVITY_CFLAGS) 
+libgrav_la_CFLAGS = $(AM_CFLAGS) $(GRAVITY_CFLAGS)
 libgrav_la_LDFLAGS = $(AM_LDFLAGS) $(EXTRA_LIBS)
 
 # Sources and special flags for the gravity MPI library
