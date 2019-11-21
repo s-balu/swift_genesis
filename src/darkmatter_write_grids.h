@@ -5,6 +5,7 @@
 #include "../config.h"
 #include "engine.h"
 #include "units.h"
+#include "common_io.h"
 
 void darkmatter_write_grids(struct engine* e, const size_t Npart,
                             const hid_t h_file,
