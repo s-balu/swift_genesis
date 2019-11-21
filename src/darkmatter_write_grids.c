@@ -259,13 +259,17 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   hid_t h_grp = H5Gcreate(h_file, group_name, H5P_DEFAULT, H5P_DEFAULT,
                           H5P_DEFAULT);
   if (h_grp < 0) error("Error while creating dark matter grids group.");
-    
+
   /* attach an attribute with the gridding type */
   H5LTset_attribute_string(h_file, group_name, "gridding_method", e->snapshot_grid_method);
 
   int i_rank, n_ranks;
+#ifdef USE_MPI
   MPI_Comm_rank(MPI_COMM_WORLD, &i_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &n_ranks);
+#else
+  i_rank = 0; n_ranks = 1;
+#endif
 
   /* split the write into slabs on the x axis */
   int local_slab_size = grid_dim / n_ranks;
@@ -285,8 +289,13 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   /* Uncomment this line to enable compression. */
   // H5Pset_deflate(dcpl_id, 6);
 
-  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  hid_t plist_id;
+#if defined(WITH_MPI) && defined(HAVE_PARALLEL_HDF5)
+  plist_id = H5Pcreate(H5P_DATASET_XFER);
   H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
+#else
+  plist_id = H5P_DEFAULT;
+#endif
 
   hsize_t start[3] = {local_offset, 0, 0};
   hsize_t count[3] = {local_slab_size, grid_dim, grid_dim};
@@ -348,9 +357,11 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       double n_to_density;
       double unit_conv_factor;
       case DENSITY:
+#ifdef USE_MPI
         /* reduce the grid */
         MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_DOUBLE,
                       MPI_SUM, MPI_COMM_WORLD);
+#endif
 
         /* convert n_particles to density */
         unit_conv_factor = units_conversion_factor(
@@ -365,16 +376,18 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       case VELOCITY_X:
       case VELOCITY_Y:
       case VELOCITY_Z:
+#ifdef USE_MPI
         /* reduce the grid */
         MPI_Allreduce(MPI_IN_PLACE, grid, n_grid_points, MPI_DOUBLE, MPI_SUM,
                       MPI_COMM_WORLD);
+#endif
 
         /* take the mean */
         unit_conv_factor = units_conversion_factor(
             internal_units, snapshot_units, UNIT_CONV_VELOCITY);
         for (int ii = 0; ii < n_grid_points; ++ii) {
             if (point_counts[ii] > 0.0) {
-                grid[ii] *= unit_conv_factor / point_counts[ii];  
+                grid[ii] *= unit_conv_factor / point_counts[ii];
             }
         }
         break;
