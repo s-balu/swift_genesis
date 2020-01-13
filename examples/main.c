@@ -858,9 +858,9 @@ int main(int argc, char *argv[]) {
 
       /* Initialise the cooling function properties */
 #ifdef COOLING_NONE
-    if (with_cooling || with_temperature) {
+    if (with_cooling) {
       error(
-          "ERROR: Running with cooling / temperature calculation"
+          "ERROR: Running with cooling calculation"
           " but compiled without it.");
     }
 #else
@@ -1419,7 +1419,10 @@ int main(int argc, char *argv[]) {
     }
 #ifdef WITH_LOGGER
     logger_log_all(e.logger, &e);
-    engine_dump_index(&e);
+
+    /* Write a sentinel timestamp */
+    logger_log_timestamp(e.logger, e.ti_current, e.time,
+                         &e.logger->timestamp_offset);
 #endif
 
     /* Write final snapshot? */

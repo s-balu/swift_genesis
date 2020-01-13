@@ -113,6 +113,8 @@ enum engine_step_properties {
 #define engine_max_sparts_per_ghost_default 1000
 #define engine_star_resort_task_depth_default 2
 #define engine_tasks_per_cell_margin 1.2
+#define engine_default_stf_subdir_per_output ""
+#define engine_default_snapshot_subdir ""
 
 /**
  * @brief The rank of the engine as a global variable (for messages).
@@ -289,6 +291,7 @@ struct engine {
   integertime_t ti_next_snapshot;
 
   char snapshot_base_name[PARSER_MAX_LINE_SIZE];
+  char snapshot_subdir[PARSER_MAX_LINE_SIZE];
   int snapshot_compression;
   int snapshot_int_time_label_on;
   int snapshot_invoke_stf;
@@ -308,6 +311,7 @@ struct engine {
 
   char stf_config_file_name[PARSER_MAX_LINE_SIZE];
   char stf_base_name[PARSER_MAX_LINE_SIZE];
+  char stf_subdir_per_output[PARSER_MAX_LINE_SIZE];
   int stf_output_count;
 
   /* extra structure finding information, allows for multiple dumps */
@@ -401,9 +405,8 @@ struct engine {
   int forcerepart;
   struct repartition *reparttype;
 
-#ifdef WITH_LOGGER
+  /* The particle logger */
   struct logger_writer *logger;
-#endif
 
   /* How many steps have we done with the same set of tasks? */
   int tasks_age;
@@ -517,6 +520,7 @@ void engine_reconstruct_multipoles(struct engine *e);
 void engine_allocate_foreign_particles(struct engine *e);
 void engine_print_stats(struct engine *e);
 void engine_check_for_dumps(struct engine *e);
+void engine_check_for_index_dump(struct engine *e);
 void engine_collect_end_of_step(struct engine *e, int apply);
 void engine_dump_snapshot(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params);
@@ -541,7 +545,7 @@ void engine_config(int restart, int fof, struct engine *e,
                    int nr_threads, int with_aff, int verbose,
                    const char *restart_file);
 void engine_dump_index(struct engine *e);
-void engine_launch(struct engine *e);
+void engine_launch(struct engine *e, const int fof);
 void engine_prepare(struct engine *e);
 void engine_init_particles(struct engine *e, int flag_entropy_ICs,
                            int clean_h_values);
@@ -578,6 +582,9 @@ void engine_make_fof_tasks(struct engine *e);
 
 /* Function prototypes, engine_marktasks.c. */
 int engine_marktasks(struct engine *e);
+
+/* Function prototypes, engine_split_particles.c. */
+void engine_split_gas_particles(struct engine *e);
 
 #ifdef HAVE_SETAFFINITY
 cpu_set_t *engine_entry_affinity(void);
