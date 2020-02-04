@@ -2428,7 +2428,8 @@ void engine_check_for_dumps(struct engine *e) {
     output_snapshot,
     output_statistics,
     output_stf,
-    output_stf_extra
+    output_stf_extra,
+    output_density_grids
   };
 
   /* What kind of output do we want? And at which time ?
@@ -2475,6 +2476,13 @@ void engine_check_for_dumps(struct engine *e) {
               }
             }
         }
+    }
+  }
+  /* Do we want to produce a density grid? */
+  if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
+    if (e->ti_next_density_grids < ti_output) {
+      ti_output = e->ti_next_density_grids;
+      type = output_density_grids;
     }
   }
 
@@ -2573,6 +2581,14 @@ void engine_check_for_dumps(struct engine *e) {
               "the interface!");
   #endif
           break;
+
+          case output_density_grids:
+
+            ???
+            e->step_props |= engine_step_prop_density_field;
+            /* ... and find the next output time */
+            engine_compute_next_density_grids_time(e);
+            break;
 
       default:
         error("Invalid dump type");
@@ -3646,6 +3662,28 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
 
   }
 
+  /* load density grid information */
+  if (e->policy & engine_policy_produce_density_grids) {
+    parser_get_param_string(params, "DensityGrids:basename",
+                            e->density_grids_base_name);
+    e->density_grids_grid_dim = parser_get_opt_param_int(params, "DensityGrids:grid_dim", 128);
+    parser_get_opt_param_string(params, "DensityGrids:grid_method",
+                            e->density_grids_grid_method, "NGP");
+    e->time_first_density_grids_output =
+        parser_get_opt_param_double(params, "DensityGrids:time_first", 0.);
+    e->a_first_density_grids_output = parser_get_opt_param_double(
+        params, "DensityGrids:scale_factor_first", 0.1);
+    e->delta_time_density_grids =
+        parser_get_opt_param_double(params, "DensityGrids:delta_time", -1.);
+  }
+
+    e->time_first_stf_output =
+        parser_get_opt_param_double(params, "StructureFinding:time_first", 0.);
+    e->a_first_stf_output = parser_get_opt_param_double(
+        params, "StructureFinding:scale_factor_first", 0.1);
+    e->delta_time_stf =
+        parser_get_opt_param_double(params, "StructureFinding:delta_time", -1.);
+
   /* Initialise FoF calls frequency. */
   if (e->policy & engine_policy_fof) {
 
@@ -4664,6 +4702,71 @@ void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
   }
 }
 
+
+/**
+ * @brief Computes the next time (on the time line) for computing density grid
+ *
+ * @param e The #engine.
+ */
+void engine_compute_next_density_grids_time(struct engine *e) {
+  /* Do output_list file case */
+  if (e->output_list_density_grids) {
+    output_list_read_next_time(e->output_list_density_grids, e, "stf", &e->ti_next_density_grids);
+    return;
+  }
+  /* Find upper-bound on last output */
+  double time_end;
+  if (e->policy & engine_policy_cosmology)
+    time_end = e->cosmology->a_end * e->delta_time_density_grids;
+  else
+    time_end = e->time_end + e->delta_time_density_grids;
+
+  /* Find next snasphot above current time */
+  double time;
+  if (e->policy & engine_policy_cosmology)
+    time = e->a_first_density_grids_output;
+  else
+    time = e->time_first_density_grids_output;
+
+  int found_density_grids_time = 0;
+  while (time < time_end) {
+
+    /* Output time on the integer timeline */
+    if (e->policy & engine_policy_cosmology)
+      e->ti_next_density_grids = log(time / e->cosmology->a_begin) / e->time_base;
+    else
+      e->ti_next_density_grids = (time - e->time_begin) / e->time_base;
+
+    /* Found it? */
+    if (e->ti_next_density_grids > e->ti_current) {
+      found_density_grids_time = 1;
+      break;
+    }
+
+    if (e->policy & engine_policy_cosmology)
+      time *= e->delta_time_density_grids;
+    else
+      time += e->delta_time_density_grids;
+  }
+  /* Deal with last snapshot */
+  if (!found_density_grids_time) {
+    e->ti_next_density_grids = -1;
+    if (e->verbose) message("No further output time.");
+  } else {
+
+    /* Be nice, talk... */
+    if (e->policy & engine_policy_cosmology) {
+      const float next_density_grids_time =
+          exp(e->ti_next_stf * e->time_base) * e->cosmology->a_begin;
+      if (e->verbose)
+        message("Next Density grids time set to a=%e.", next_density_grids_time);
+    } else {
+      const float next_density_grids_time = e->ti_next_density_grids * e->time_base + e->time_begin;
+      if (e->verbose)
+        message("Next Density grids time set to t=%e.", next_density_grids_time);
+    }
+  }
+}
 
 /**
  * @brief Computes the next time (on the time line) for FoF black holes seeding
