@@ -462,7 +462,7 @@ struct engine {
   const struct star_formation *star_formation;
 
   /* Properties of the sellar feedback model */
-  const struct feedback_props *feedback_props;
+  struct feedback_props *feedback_props;
 
   /* Properties of the chemistry model */
   const struct chemistry_global_data *chemistry;
@@ -515,6 +515,7 @@ void engine_compute_next_fof_time(struct engine *e);
 void engine_compute_next_statistics_time(struct engine *e);
 void engine_recompute_displacement_constraint(struct engine *e);
 void engine_unskip(struct engine *e);
+void engine_unskip_timestep_communications(struct engine *e);
 void engine_drift_all(struct engine *e, const int drift_mpoles);
 void engine_drift_top_multipoles(struct engine *e);
 void engine_reconstruct_multipoles(struct engine *e);
@@ -535,7 +536,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  const struct entropy_floor_properties *entropy_floor,
                  struct gravity_props *gravity, const struct stars_props *stars,
                  const struct black_holes_props *black_holes,
-                 const struct feedback_props *feedback, struct pm_mesh *mesh,
+                 struct feedback_props *feedback, struct pm_mesh *mesh,
                  const struct external_potential *potential,
                  struct cooling_function_data *cooling_func,
                  const struct star_formation *starform,
@@ -546,7 +547,7 @@ void engine_config(int restart, int fof, struct engine *e,
                    int nr_threads, int with_aff, int verbose,
                    const char *restart_file);
 void engine_dump_index(struct engine *e);
-void engine_launch(struct engine *e, const int fof);
+void engine_launch(struct engine *e, const char *call);
 void engine_prepare(struct engine *e);
 void engine_init_particles(struct engine *e, int flag_entropy_ICs,
                            int clean_h_values);

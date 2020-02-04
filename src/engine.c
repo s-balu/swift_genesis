@@ -1855,9 +1855,9 @@ void engine_skip_drift(struct engine *e) {
  * @brief Launch the runners.
  *
  * @param e The #engine.
- * @param fof Are we launching the FOF tasks or the regular tasks?
+ * @param call What kind of tasks are we running? (For time analysis)
  */
-void engine_launch(struct engine *e, const int fof) {
+void engine_launch(struct engine *e, const char *call) {
   const ticks tic = getticks();
 
 #ifdef SWIFT_DEBUG_CHECKS
@@ -1883,14 +1883,9 @@ void engine_launch(struct engine *e, const int fof) {
   /* Sit back and wait for the runners to come home. */
   swift_barrier_wait(&e->wait_barrier);
 
-  if (e->verbose) {
-    if (fof)
-      message("(fof) took %.3f %s.", clocks_from_ticks(getticks() - tic),
-              clocks_getunit());
-    else
-      message("(tasks) took %.3f %s.", clocks_from_ticks(getticks() - tic),
-              clocks_getunit());
-  }
+  if (e->verbose)
+    message("(%s) took %.3f %s.", call, clocks_from_ticks(getticks() - tic),
+            clocks_getunit());
 }
 
 /**
@@ -1977,7 +1972,7 @@ void engine_init_particles(struct engine *e, int flag_entropy_ICs,
 
   /* Now, launch the calculation */
   TIMER_TIC;
-  engine_launch(e, /*fof=*/0);
+  engine_launch(e, "tasks");
   TIMER_TOC(timer_runners);
 
   /* Apply some conversions (e.g. internal energy -> entropy) */
@@ -1991,7 +1986,7 @@ void engine_init_particles(struct engine *e, int flag_entropy_ICs,
     if (hydro_need_extra_init_loop) {
       engine_marktasks(e);
       engine_skip_force_and_kick(e);
-      engine_launch(e, /*fof=*/0);
+      engine_launch(e, "tasks");
     }
   }
 
@@ -2039,8 +2034,18 @@ void engine_init_particles(struct engine *e, int flag_entropy_ICs,
 
   /* Run the 0th time-step */
   TIMER_TIC2;
-  engine_launch(e, /*fof=*/0);
+  engine_launch(e, "tasks");
   TIMER_TOC2(timer_runners);
+
+  /* Since the time-steps may have changed because of the limiter's
+   * action, we need to communicate the new time-step sizes */
+  if ((e->policy & engine_policy_timestep_sync) ||
+      (e->policy & engine_policy_timestep_limiter)) {
+#ifdef WITH_MPI
+    engine_unskip_timestep_communications(e);
+    engine_launch(e, "timesteps");
+#endif
+  }
 
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   /* Check the accuracy of the gravity calculation */
@@ -2337,8 +2342,18 @@ void engine_step(struct engine *e) {
 
   /* Start all the tasks. */
   TIMER_TIC;
-  engine_launch(e, /*fof=*/0);
+  engine_launch(e, "tasks");
   TIMER_TOC(timer_runners);
+
+  /* Since the time-steps may have changed because of the limiter's
+   * action, we need to communicate the new time-step sizes */
+  if ((e->policy & engine_policy_timestep_sync) ||
+      (e->policy & engine_policy_timestep_limiter)) {
+#ifdef WITH_MPI
+    engine_unskip_timestep_communications(e);
+    engine_launch(e, "timesteps");
+#endif
+  }
 
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   /* Check the accuracy of the gravity calculation */
@@ -2664,6 +2679,13 @@ void engine_dump_restarts(struct engine *e, int drifted_all, int force) {
       /* Drift all particles first (may have just been done). */
       if (!drifted_all) engine_drift_all(e, /*drift_mpole=*/1);
       restart_write(e, e->restart_file);
+
+#ifdef WITH_MPI
+      /* Make sure all ranks finished writing to avoid having incomplete
+       * sets of restart files should the code crash before all the ranks
+       * are done */
+      MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
       if (e->verbose)
         message("Dumping restart files took %.3f %s",
@@ -3180,7 +3202,7 @@ void engine_collect_stars_counter(struct engine *e) {
 
   /* Reset counters */
   for (size_t i = 0; i < e->s->nr_sparts_foreign; i++) {
-    e->s->sparts_foreign[i].num_ngb_force = 0;
+    e->s->sparts_foreign[i].num_ngb_feedback = 0;
   }
 
   /* Update counters */
@@ -3200,7 +3222,7 @@ void engine_collect_stars_counter(struct engine *e) {
               id_j, j, displs[engine_rank], n_sparts_int[engine_rank]);
         }
 
-        local_sparts[i].num_ngb_force += sparts[j].num_ngb_force;
+        local_sparts[i].num_ngb_feedback += sparts[j].num_ngb_feedback;
       }
     }
   }
@@ -3434,7 +3456,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  const struct entropy_floor_properties *entropy_floor,
                  struct gravity_props *gravity, const struct stars_props *stars,
                  const struct black_holes_props *black_holes,
-                 const struct feedback_props *feedback, struct pm_mesh *mesh,
+                 struct feedback_props *feedback, struct pm_mesh *mesh,
                  const struct external_potential *potential,
                  struct cooling_function_data *cooling_func,
                  const struct star_formation *starform,
