@@ -2418,7 +2418,9 @@ void engine_check_for_dumps(struct engine *e) {
 
   const int with_cosmology = (e->policy & engine_policy_cosmology);
   const int with_stf = (e->policy & engine_policy_structure_finding);
+#ifdef HAVE_VELOCIRAPTOR
   int iextra = -1;
+#endif
 
   /* What kind of output are we getting? */
   enum output_type {
@@ -2450,7 +2452,7 @@ void engine_check_for_dumps(struct engine *e) {
       ti_output = e->ti_next_snapshot;
       type = output_snapshot;
     }
-  } 
+  }
 
   /* Do we want to perform structure finding? */
   if (with_stf) {
@@ -2465,7 +2467,9 @@ void engine_check_for_dumps(struct engine *e) {
             if (e->ti_end_min > e->ti_next_stf_extra[i] && e->ti_next_stf_extra[i] > 0) {
               if (e->ti_next_stf_extra[i] < ti_output) {
                 ti_output = e->ti_next_stf_extra[i];
+#ifdef HAVE_VELOCIRAPTOR
                 iextra = i;
+#endif
                 type = output_stf_extra;
                 break;
               }
@@ -4124,7 +4128,7 @@ void engine_config(int restart, int fof, struct engine *e,
     if (e->policy & engine_policy_structure_finding) {
       engine_compute_next_stf_time(e);
       if (e->num_extra_stf_outputs) {
-         engine_compute_next_stf_time_extra_outputs(e); 
+         engine_compute_next_stf_time_extra_outputs(e);
       }
     }
 
@@ -4538,7 +4542,7 @@ void engine_compute_next_stf_time(struct engine *e) {
   double time_end;
   if (e->policy & engine_policy_cosmology)
     time_end = e->cosmology->a_end * e->delta_time_stf;
-  else 
+  else
     time_end = e->time_end + e->delta_time_stf;
 
   /* Find next snasphot above current time */
