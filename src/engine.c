@@ -61,6 +61,7 @@
 #include "cosmology.h"
 #include "cycle.h"
 #include "debug.h"
+#include "darkmatter_write_grids.h"
 #include "entropy_floor.h"
 #include "equation_of_state.h"
 #include "error.h"
@@ -2584,7 +2585,7 @@ void engine_check_for_dumps(struct engine *e) {
 
           case output_density_grids:
 
-            ???
+            engine_dump_density_grids(e);
             e->step_props |= engine_step_prop_density_field;
             /* ... and find the next output time */
             engine_compute_next_density_grids_time(e);
@@ -3339,6 +3340,72 @@ void engine_dump_snapshot(struct engine *e) {
   clocks_gettime(&time2);
   if (e->verbose)
     message("writing particle properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
+}
+
+/**
+ * @brief Writes density grids with the current state of the engine
+ *
+ * @param e The #engine.
+ */
+void engine_dump_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+  if (strnlen(e->density_grids_subdir, PARSER_MAX_LINE_SIZE) > 0) {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s/%s",
+                 e->density_grids_subdir,
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error(
+          "FILENAME_BUFFER_SIZE is too small for density grids path and file name");
+    }
+      /* Try to ensure the directory exists */
+#ifdef WITH_MPI
+    if (engine_rank == 0) mkdir(e->density_grids_subdir, 0777);
+    MPI_Barrier(MPI_COMM_WORLD);
+#else
+    mkdir(e->density_grids_subdir, 0777);
+#endif
+  } else {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s",
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+  }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  /* Flag that we dumped a grids */
+  e->step_props |= engine_step_prop_density_field;
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
             (float)clocks_diff(&time1, &time2), clocks_getunit());
 }
 

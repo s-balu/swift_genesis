@@ -346,6 +346,7 @@ struct engine {
   double delta_time_density_grids;
   integertime_t ti_next_density_grids;
   struct output_list *output_list_density_grids;
+  int density_grids_output_count;
 
   /* FoF black holes seeding information */
   double a_first_fof_call;
@@ -540,6 +541,7 @@ void engine_check_for_dumps(struct engine *e);
 void engine_check_for_index_dump(struct engine *e);
 void engine_collect_end_of_step(struct engine *e, int apply);
 void engine_dump_snapshot(struct engine *e);
+void engine_dump_density_grids(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params);
 void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  long long Ngas, long long Ngparts, long long Nstars,
