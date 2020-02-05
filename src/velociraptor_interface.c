@@ -692,15 +692,16 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   //              e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
   //   error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
   // }
+  char outputFileName[FILENAME_BUFFER_SIZE];
   if (linked_with_snap > 0) {
-    snprintf(outputFileName, FILENAME_BUFFER_SIZE,
+    if (snprintf(outputFileName, FILENAME_BUFFER_SIZE,
              "stf_%s_%04i.VELOCIraptor", e->snapshot_base_name,
              e->snapshot_output_count) >= FILENAME_BUFFER_SIZE) {
         error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
     }
   }
   else if (linked_with_snap == 0){
-    snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
+    if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
              e->stf_base_name, e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
         error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
     }
