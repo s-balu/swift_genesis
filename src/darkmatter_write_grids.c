@@ -457,9 +457,9 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
                   const struct unit_system* internal_units,
                   const struct unit_system* snapshot_units) {
 
+  // const struct gpart* gparts = e->s->gparts;
   // const struct part* parts = e->s->parts;
   // const struct xpart* xparts = e->s->xparts;
-  // const struct gpart* gparts = e->s->gparts;
   // const struct spart* sparts = e->s->sparts;
   // const struct bpart* bparts = e->s->bparts;
   // struct swift_params* params = e->parameter_file;
@@ -668,25 +668,25 @@ void write_grids_parallel(struct engine* e, const char* baseName,
                            const struct unit_system* snapshot_units,
                            int mpi_rank, int mpi_size, MPI_Comm comm,
                            MPI_Info info) {
-  const struct part* parts = e->s->parts;
-  const struct xpart* xparts = e->s->xparts;
   const struct gpart* gparts = e->s->gparts;
-  const struct spart* sparts = e->s->sparts;
-  const struct bpart* bparts = e->s->bparts;
-  struct swift_params* params = e->parameter_file;
-  const int with_cosmology = e->policy & engine_policy_cosmology;
-  const int with_cooling = e->policy & engine_policy_cooling;
-  const int with_temperature = e->policy & engine_policy_temperature;
-  const int with_fof = e->policy & engine_policy_fof;
+  //const struct part* parts = e->s->parts;
+  //const struct xpart* xparts = e->s->xparts;
+  //const struct spart* sparts = e->s->sparts;
+  //const struct bpart* bparts = e->s->bparts;
+  //struct swift_params* params = e->parameter_file;
+  //const int with_cosmology = e->policy & engine_policy_cosmology;
+  //const int with_cooling = e->policy & engine_policy_cooling;
+  //const int with_temperature = e->policy & engine_policy_temperature;
+  //const int with_fof = e->policy & engine_policy_fof;
   const int with_DM_background = e->s->with_DM_background;
 
   /* Number of particles currently in the arrays */
   const size_t Ntot = e->s->nr_gparts;
-  const size_t Ngas = e->s->nr_parts;
-  const size_t Nstars = e->s->nr_sparts;
-  const size_t Nblackholes = e->s->nr_bparts;
-  const size_t Nbaryons = Ngas + Nstars;
-  const size_t Ndm = Ntot > 0 ? Ntot - Nbaryons : 0;
+  //const size_t Ngas = e->s->nr_parts;
+  //const size_t Nstars = e->s->nr_sparts;
+  //const size_t Nblackholes = e->s->nr_bparts;
+  //const size_t Nbaryons = Ngas + Nstars + Nblackholes;
+  //const size_t Ndm = Ntot > 0 ? Ntot - Nbaryons : 0;
 
   size_t Ndm_background = 0;
   if (with_DM_background) {
@@ -812,10 +812,10 @@ void write_grids_parallel(struct engine* e, const char* baseName,
   darkmatter_write_grids(e, Ndm_written, h_file, internal_units, snapshot_units);
 
   /* Close particle group */
-  H5Gclose(h_grp);
+  //H5Gclose(h_grp);
 
   /* Close property descriptor */
-  H5Pclose(plist_id);
+  //H5Pclose(plist_id);
 
   /* Close file */
   H5Fclose(h_file);
