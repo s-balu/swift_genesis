@@ -4830,7 +4830,6 @@ void engine_compute_next_density_grids_time(struct engine *e) {
     else
       e->ti_next_density_grids = (time - e->time_begin) / e->time_base;
 
-      e->ti_next_density_grids);
     /* Found it? */
     if (e->ti_next_density_grids > e->ti_current) {
       found_density_grids_time = 1;
