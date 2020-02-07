@@ -169,6 +169,7 @@ int main(int argc, char *argv[]) {
   int with_drift_all = 0;
   int with_mpole_reconstruction = 0;
   int with_structure_finding = 0;
+  int with_density_grids = 0;
   int with_eagle = 0;
   int verbose = 0;
   int nr_threads = 1;
@@ -221,6 +222,8 @@ int main(int argc, char *argv[]) {
           NULL, 0, 0),
       OPT_BOOLEAN('x', "velociraptor", &with_structure_finding,
                   "Run with structure finding.", NULL, 0, 0),
+      OPT_BOOLEAN(0, "density_grids", &with_density_grids,
+                  "Run with producing density grids.", NULL, 0, 0),
       OPT_BOOLEAN(0, "limiter", &with_timestep_limiter,
                   "Run with time-step limiter.", NULL, 0, 0),
       OPT_BOOLEAN(0, "sync", &with_timestep_sync,
@@ -1143,6 +1146,7 @@ int main(int argc, char *argv[]) {
     if (with_structure_finding)
       engine_policies |= engine_policy_structure_finding;
     if (with_fof) engine_policies |= engine_policy_fof;
+    if (with_density_grids) engine_policies |= engine_policy_produce_density_grids;
 
     /* Initialize the engine with the space and policies. */
     if (myrank == 0) clocks_gettime(&tic);
