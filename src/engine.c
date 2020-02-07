@@ -2420,6 +2420,7 @@ void engine_check_for_dumps(struct engine *e) {
 
   const int with_cosmology = (e->policy & engine_policy_cosmology);
   const int with_stf = (e->policy & engine_policy_structure_finding);
+  const int with_density_grids = (e->policy & engine_policy_produce_density_grids);
 #ifdef HAVE_VELOCIRAPTOR
   int iextra = -1;
 #endif
@@ -2481,14 +2482,14 @@ void engine_check_for_dumps(struct engine *e) {
     }
   }
   /* Do we want to produce a density grid? */
-
-  if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
-    if (e->ti_next_density_grids < ti_output) {
-      ti_output = e->ti_next_density_grids;
-      type = output_density_grids;
+  if (with_density_grids) {
+      if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
+        if (e->ti_next_density_grids < ti_output) {
+          ti_output = e->ti_next_density_grids;
+          type = output_density_grids;
+      }
     }
   }
-
 
   /* Store information before attempting extra dump-related drifts */
   const integertime_t ti_current = e->ti_current;
