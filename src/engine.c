@@ -121,7 +121,8 @@ const char *engine_policy_names[] = {"none",
                                      "black holes",
                                      "fof search",
                                      "time-step limiter",
-                                     "time-step sync"};
+                                     "time-step sync",
+                                     "density grids"};
 
 /** The rank of the engine as a global variable (for messages). */
 int engine_rank;
@@ -2586,9 +2587,9 @@ void engine_check_for_dumps(struct engine *e) {
           break;
           case output_density_grids:
 
-            engine_dump_density_grids(e); 
+            engine_dump_density_grids(e);
             e->step_props |= engine_step_prop_density_field;
-            // ... and find the next output time 
+            // ... and find the next output time
             engine_compute_next_density_grids_time(e);
             break;
       default:
