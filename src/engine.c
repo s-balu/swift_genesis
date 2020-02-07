@@ -4961,6 +4961,12 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
     e->output_list_density_grids = NULL;
     output_list_init(&e->output_list_density_grids, e, "DensityGrids",
                      &e->delta_time_density_grids, &density_grids_time_first);
+    if (e->output_list_density_grids) {
+      if (e->policy & engine_policy_cosmology)
+        e->a_first_density_grids_output = density_grids_time_first;
+      else
+        e->time_first_density_grids_output = density_grids_time_first;
+    }
 }
 
 /**
