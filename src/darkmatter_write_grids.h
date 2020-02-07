@@ -12,6 +12,11 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
                             const hid_t h_file,
                             const struct unit_system* internal_units,
                             const struct unit_system* snapshot_units);
+void darkmatter_write_density_grids_outputs(struct engine* e, const size_t Npart,
+                            const hid_t h_file,
+                            const struct unit_system* internal_units,
+                            const struct unit_system* snapshot_units);
+
 #if defined(HAVE_HDF5) && defined(WITH_MPI) && defined(HAVE_PARALLEL_HDF5)
 void write_grids_parallel(struct engine* e, const char* baseName,
                             const struct unit_system* internal_units,
