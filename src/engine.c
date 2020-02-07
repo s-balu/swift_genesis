@@ -2480,12 +2480,14 @@ void engine_check_for_dumps(struct engine *e) {
     }
   }
   /* Do we want to produce a density grid? */
+
   if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
     if (e->ti_next_density_grids < ti_output) {
       ti_output = e->ti_next_density_grids;
       type = output_density_grids;
     }
   }
+
 
   /* Store information before attempting extra dump-related drifts */
   const integertime_t ti_current = e->ti_current;
@@ -2582,15 +2584,13 @@ void engine_check_for_dumps(struct engine *e) {
               "the interface!");
   #endif
           break;
-
           case output_density_grids:
 
-            engine_dump_density_grids(e);
+            engine_dump_density_grids(e); 
             e->step_props |= engine_step_prop_density_field;
-            /* ... and find the next output time */
+            // ... and find the next output time 
             engine_compute_next_density_grids_time(e);
             break;
-
       default:
         error("Invalid dump type");
     }
@@ -3743,13 +3743,6 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
     e->delta_time_density_grids =
         parser_get_opt_param_double(params, "DensityGrids:delta_time", -1.);
   }
-
-    e->time_first_stf_output =
-        parser_get_opt_param_double(params, "StructureFinding:time_first", 0.);
-    e->a_first_stf_output = parser_get_opt_param_double(
-        params, "StructureFinding:scale_factor_first", 0.1);
-    e->delta_time_stf =
-        parser_get_opt_param_double(params, "StructureFinding:delta_time", -1.);
 
   /* Initialise FoF calls frequency. */
   if (e->policy & engine_policy_fof) {
