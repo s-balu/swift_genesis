@@ -4224,6 +4224,7 @@ void engine_config(int restart, int fof, struct engine *e,
           error(
               "Time of first Density Grids (%e) must be after the simulation start t=%e.",
               e->time_first_density_grids_output, e->time_begin);
+      }
     }
 
     /* Get the total mass */
@@ -4256,6 +4257,10 @@ void engine_config(int restart, int fof, struct engine *e,
       if (e->num_extra_stf_outputs) {
          engine_compute_next_stf_time_extra_outputs(e);
       }
+    }
+
+    if (e->policy & engine_policy_produce_density_grids) {
+      engine_compute_next_density_grids_time(e);
     }
 
     /* Find the time of the first stf output */
@@ -4816,8 +4821,6 @@ void engine_compute_next_density_grids_time(struct engine *e) {
   else
     time = e->time_first_density_grids_output;
 
-    printf("??? checking end and start time in grids t_f = %f t_i = %f \n", time_end, time);
-
   int found_density_grids_time = 0;
   while (time < time_end) {
 
@@ -4827,7 +4830,6 @@ void engine_compute_next_density_grids_time(struct engine *e) {
     else
       e->ti_next_density_grids = (time - e->time_begin) / e->time_base;
 
-      printf("??? checking next time t_c = %ld t_n = %ld \n",e->ti_current,
       e->ti_next_density_grids);
     /* Found it? */
     if (e->ti_next_density_grids > e->ti_current) {
