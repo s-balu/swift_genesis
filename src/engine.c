@@ -4773,7 +4773,7 @@ void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
 void engine_compute_next_density_grids_time(struct engine *e) {
   /* Do output_list file case */
   if (e->output_list_density_grids) {
-    output_list_read_next_time(e->output_list_density_grids, e, "stf", &e->ti_next_density_grids);
+    output_list_read_next_time(e->output_list_density_grids, e, "density", &e->ti_next_density_grids);
     return;
   }
   /* Find upper-bound on last output */
@@ -4819,7 +4819,7 @@ void engine_compute_next_density_grids_time(struct engine *e) {
     /* Be nice, talk... */
     if (e->policy & engine_policy_cosmology) {
       const float next_density_grids_time =
-          exp(e->ti_next_stf * e->time_base) * e->cosmology->a_begin;
+          exp(e->ti_next_density_grids * e->time_base) * e->cosmology->a_begin;
       if (e->verbose)
         message("Next Density grids time set to a=%e.", next_density_grids_time);
     } else {
