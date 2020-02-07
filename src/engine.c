@@ -4927,10 +4927,10 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
 
   /* Deal with stf */
   double stf_time_first;
-  char outlistname[200]
-  sprintf(outlistname,"StructureFinding")
+  char outlistname[200];
+  sprintf(outlistname,"StructureFinding");
   e->output_list_stf = NULL;
-  output_list_init(&e->output_list_stf, e, outputlistname,
+  output_list_init(&e->output_list_stf, e, outlistname,
                    &e->delta_time_stf, &stf_time_first);
 
   if (e->output_list_stf) {
@@ -4944,7 +4944,7 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
   if (e->num_extra_stf_outputs) {
       for (int i=0;i<e->num_extra_stf_outputs;i++) {
           e->output_list_stf_extra[i] = NULL;
-          sprintf(outlistname,"StructureFinding_Extra_%d",i)
+          sprintf(outlistname,"StructureFinding_Extra_%d",i);
           output_list_init(&e->output_list_stf_extra[i], e, outlistname,
                            &e->delta_time_stf_extra[i], &stf_time_first);
 
@@ -4957,7 +4957,7 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
       }
     }
 
-    double densiy_grids_time_first;
+    double density_grids_time_first;
     e->output_list_density_grids = NULL;
     output_list_init(&e->output_list_density_grids, e, "DensityGrids",
                      &e->delta_time_density_grids, &density_grids_time_first);
