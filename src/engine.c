@@ -2586,6 +2586,7 @@ void engine_check_for_dumps(struct engine *e) {
               "the interface!");
   #endif
           break;
+
           case output_density_grids:
 
             engine_dump_density_grids(e);
@@ -4150,6 +4151,17 @@ void engine_config(int restart, int fof, struct engine *e,
               "simulation start a=%e.",
               e->a_first_stf_output, e->cosmology->a_begin);
       }
+      if (e->policy & engine_policy_produce_density_grids) {
+
+        if (e->delta_time_density_grids == -1. )
+          error("A value for `DensityGrids:delta_time` must be specified");
+
+        if (e->a_first_density_grids_output < e->cosmology->a_begin)
+          error(
+              "Scale-factor of first Density Grid output (%e) must be after the "
+              "simulation start a=%e.",
+              e->a_first_density_grids_output, e->cosmology->a_begin);
+      }
 
       if (e->policy & engine_policy_fof) {
 
@@ -4199,6 +4211,19 @@ void engine_config(int restart, int fof, struct engine *e,
               "Time of first STF (%e) must be after the simulation start t=%e.",
               e->time_first_stf_output, e->time_begin);
       }
+
+      if (e->policy & engine_policy_produce_density_grids) {
+
+        if (e->delta_time_density_grids == -1.)
+          error("A value for `DensityGrids:delta_time` must be specified");
+
+        if (e->delta_time_density_grids <= 0. && e->delta_time_density_grids != -1.)
+          error("Time between successive Density Grids (%e) must be positive.", e->delta_time_density_grids);
+
+        if (e->time_first_density_grids_output < e->time_begin)
+          error(
+              "Time of first Density Grids (%e) must be after the simulation start t=%e.",
+              e->time_first_density_grids_output, e->time_begin);
     }
 
     /* Get the total mass */
@@ -4791,6 +4816,8 @@ void engine_compute_next_density_grids_time(struct engine *e) {
   else
     time = e->time_first_density_grids_output;
 
+    printf("??? checking end and start time in grids t_f = %f t_i = %f \n", time_end, time);
+
   int found_density_grids_time = 0;
   while (time < time_end) {
 
@@ -4800,6 +4827,8 @@ void engine_compute_next_density_grids_time(struct engine *e) {
     else
       e->ti_next_density_grids = (time - e->time_begin) / e->time_base;
 
+      printf("??? checking next time t_c = %ld t_n = %ld \n",e->ti_current,
+      e->ti_next_density_grids);
     /* Found it? */
     if (e->ti_next_density_grids > e->ti_current) {
       found_density_grids_time = 1;
