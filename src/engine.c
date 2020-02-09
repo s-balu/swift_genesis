@@ -3439,7 +3439,6 @@ void engine_dump_stf_density_grids(struct engine *e) {
 
   /* Determine snapshot location */
   char densitygridBase[FILENAME_BUFFER_SIZE];
-      e->stf_subdir_per_output,
     if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s.den",
                  e->stf_base_name) >= FILENAME_BUFFER_SIZE) {
       error("FILENAME_BUFFER_SIZE is too small for density grids file name");

@@ -1112,6 +1112,145 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
   H5Fclose(h_file);
 }
 
+/**
+ * @brief Prepares a file for a parallel write.
+ *
+ * @param e The #engine.
+ * @param baseName The base name of the snapshots.
+ * @param N_total The total number of particles of each type to write.
+ * @param internal_units The #unit_system used internally.
+ * @param snapshot_units The #unit_system used in the snapshots.
+ */
+void prepare_stf_density_grids_file(struct engine* e, const char* baseName, long long N_total[6],
+                  const struct unit_system* internal_units,
+                  const struct unit_system* snapshot_units) {
+
+  int numFiles = 1;
+
+  /* HDF5 File name */
+  char fileName[FILENAME_BUFFER_SIZE];
+  snprintf(fileName, FILENAME_BUFFER_SIZE, "%s_%04i.hdf5", baseName,
+             e->stf_output_count-1); //stf output count has already been increased by one by this point
+
+  /* Open HDF5 file with the chosen parameters */
+  hid_t h_file = H5Fcreate(fileName, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+  if (h_file < 0) error("Error while opening file '%s'.", fileName);
+
+  /* Open header to write simulation properties */
+  /* message("Writing file header..."); */
+  hid_t h_grp =
+      H5Gcreate(h_file, "/Header", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  if (h_grp < 0) error("Error while creating file header\n");
+
+  /* Convert basic output information to snapshot units */
+  const double factor_time =
+      units_conversion_factor(internal_units, snapshot_units, UNIT_CONV_TIME);
+  const double factor_length =
+      units_conversion_factor(internal_units, snapshot_units, UNIT_CONV_LENGTH);
+  const double dblTime = e->time * factor_time;
+  const double dim[3] = {e->s->dim[0] * factor_length,
+                         e->s->dim[1] * factor_length,
+                         e->s->dim[2] * factor_length};
+
+  /* Print the relevant information and print status */
+  io_write_attribute(h_grp, "BoxSize", DOUBLE, dim, 3);
+  io_write_attribute(h_grp, "Time", DOUBLE, &dblTime, 1);
+  const int dimension = (int)hydro_dimension;
+  io_write_attribute(h_grp, "Dimension", INT, &dimension, 1);
+  io_write_attribute(h_grp, "Redshift", DOUBLE, &e->cosmology->z, 1);
+  io_write_attribute(h_grp, "Scale-factor", DOUBLE, &e->cosmology->a, 1);
+  io_write_attribute_s(h_grp, "Code", "SWIFT");
+  time_t tm = time(NULL);
+  io_write_attribute_s(h_grp, "Snapshot date", ctime(&tm));
+  io_write_attribute_s(h_grp, "RunName", e->run_name);
+
+  /* GADGET-2 legacy values */
+  /* Number of particles of each type */
+  unsigned int numParticles[swift_type_count] = {0};
+  unsigned int numParticlesHighWord[swift_type_count] = {0};
+  for (int ptype = 0; ptype < swift_type_count; ++ptype) {
+    numParticles[ptype] = (unsigned int)N_total[ptype];
+    numParticlesHighWord[ptype] = (unsigned int)(N_total[ptype] >> 32);
+  }
+  io_write_attribute(h_grp, "NumPart_ThisFile", LONGLONG, N_total,
+                     swift_type_count);
+  io_write_attribute(h_grp, "NumPart_Total", UINT, numParticles,
+                     swift_type_count);
+  io_write_attribute(h_grp, "NumPart_Total_HighWord", UINT,
+                     numParticlesHighWord, swift_type_count);
+  double MassTable[6] = {0., 0., 0., 0., 0., 0.};
+  io_write_attribute(h_grp, "MassTable", DOUBLE, MassTable, swift_type_count);
+  unsigned int flagEntropy[swift_type_count] = {0};
+  //flagEntropy[0] = writeEntropyFlag();
+  io_write_attribute(h_grp, "Flag_Entropy_ICs", UINT, flagEntropy,
+                     swift_type_count);
+  io_write_attribute(h_grp, "NumFilesPerSnapshot", INT, &numFiles, 1);
+
+  /* Close header */
+  H5Gclose(h_grp);
+
+  /* Print the code version */
+  io_write_code_description(h_file);
+
+  /* Print the run's policy */
+  io_write_engine_policy(h_file, e);
+
+
+  /* Print the cosmological parameters */
+  h_grp =
+      H5Gcreate(h_file, "/Cosmology", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  if (h_grp < 0) error("Error while creating cosmology group");
+  if (e->policy & engine_policy_cosmology)
+    io_write_attribute_i(h_grp, "Cosmological run", 1);
+  else
+    io_write_attribute_i(h_grp, "Cosmological run", 0);
+  cosmology_write_model(h_grp, e->cosmology);
+  H5Gclose(h_grp);
+
+  /* Print the runtime parameters */
+  h_grp =
+      H5Gcreate(h_file, "/Parameters", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  if (h_grp < 0) error("Error while creating parameters group");
+  parser_write_params_to_hdf5(e->parameter_file, h_grp, 1);
+  H5Gclose(h_grp);
+
+  /* Print the runtime unused parameters */
+  h_grp = H5Gcreate(h_file, "/UnusedParameters", H5P_DEFAULT, H5P_DEFAULT,
+                    H5P_DEFAULT);
+  if (h_grp < 0) error("Error while creating parameters group");
+  parser_write_params_to_hdf5(e->parameter_file, h_grp, 0);
+  H5Gclose(h_grp);
+
+  /* Print the system of Units used in the spashot */
+  io_write_unit_system(h_file, snapshot_units, "Units");
+
+  /* Print the system of Units used internally */
+  io_write_unit_system(h_file, internal_units, "InternalCodeUnits");
+
+  /* Loop over all particle types */
+  for (int ptype = 0; ptype < swift_type_count; ptype++) {
+
+    /* Don't do anything if no particle of this kind */
+    if (N_total[ptype] == 0) continue;
+
+    /* Create the particle group in the file */
+    char partTypeGroupName[PARTICLE_GROUP_BUFFER_SIZE];
+    snprintf(partTypeGroupName, PARTICLE_GROUP_BUFFER_SIZE, "/PartType%d",
+             ptype);
+    h_grp = H5Gcreate(h_file, partTypeGroupName, H5P_DEFAULT, H5P_DEFAULT,
+                      H5P_DEFAULT);
+    if (h_grp < 0)
+      error("Error while opening particle group %s.", partTypeGroupName);
+
+    /* Close particle group */
+    H5Gclose(h_grp);
+
+  }
+
+  /* Close the file for now */
+  H5Fclose(h_file);
+}
+
 #if defined(WITH_MPI) && defined(HAVE_PARALLEL_HDF5)
 /**
  * @brief Write dark matter density and velocity grids.
@@ -1340,7 +1479,7 @@ void write_stf_grids_parallel(struct engine* e, const char* baseName,
 
   /* Rank 0 prepares the file */
   if (mpi_rank == 0)
-    prepare_density_grids_file(e, baseName, N_total, internal_units, snapshot_units);
+    prepare_stf_density_grids_file(e, baseName, N_total, internal_units, snapshot_units);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -1404,9 +1543,19 @@ void write_grids_serial(struct engine* e, const char* baseName,
                            int mpi_rank, int mpi_size, MPI_Comm comm,
                            MPI_Info info) {
 }
+void write_stf_grids_serial(struct engine* e, const char* baseName,
+                           const struct unit_system* internal_units,
+                           const struct unit_system* snapshot_units,
+                           int mpi_rank, int mpi_size, MPI_Comm comm,
+                           MPI_Info info) {
+}
 #endif
 
 void write_grids_single(struct engine* e, const char* baseName,
+                           const struct unit_system* internal_units,
+                           const struct unit_system* snapshot_units) {
+}
+void write_stf_grids_single(struct engine* e, const char* baseName,
                            const struct unit_system* internal_units,
                            const struct unit_system* snapshot_units) {
 }
