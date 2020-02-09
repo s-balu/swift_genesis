@@ -2561,6 +2561,10 @@ void engine_check_for_dumps(struct engine *e) {
         if (!e->stf_this_timestep) {
           velociraptor_invoke(e, /*linked_with_snap=*/0);
           e->step_props |= engine_step_prop_stf;
+          /* produce density grids at the same time */
+          if (with_density_grids && e->stf_dump_grids) {
+              engine_dump_stf_density_grids(e);
+            }
         }
 
         /* ... and find the next output time */
@@ -2570,6 +2574,7 @@ void engine_check_for_dumps(struct engine *e) {
             "Asking for a VELOCIraptor output but SWIFT was compiled without "
             "the interface!");
 #endif
+
         break;
 
         case output_stf_extra:
@@ -3413,6 +3418,55 @@ void engine_dump_density_grids(struct engine *e) {
 }
 
 /**
+ * @brief Writes density grids with the current state of the engine when structure finding
+ * invoked
+ *
+ * @param e The #engine.
+ */
+void engine_dump_stf_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping structure finding related grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping structure finding related grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+      e->stf_subdir_per_output,
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s.den",
+                 e->stf_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_stf_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_stf_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_stf_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
+}
+
+/**
  * @brief Writes an index file with the current state of the engine
  *
  * @param e The #engine.
@@ -3729,6 +3783,15 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
             e->delta_time_stf_extra[i] =
                 parser_get_opt_param_double(params, stringtemp, -1.);
         }
+    }
+    /* load density grid information if producing density fields at the same time as
+    halo catalogs */
+    if (e->policy & engine_policy_produce_density_grids) {
+        e->stf_dump_grids =
+            parser_get_opt_param_int(params, "StructureFinding:DensityGrids:dump_grids", 0);
+        e->stf_density_grids_grid_dim = parser_get_opt_param_int(params, "StructureFinding:DensityGrids:grid_dim", 128);
+        parser_get_opt_param_string(params, "DensityGrids:grid_method",
+                                e->stf_density_grids_grid_method, "NGP");
     }
 
   }

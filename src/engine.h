@@ -316,6 +316,9 @@ struct engine {
   char stf_base_name[PARSER_MAX_LINE_SIZE];
   char stf_subdir_per_output[PARSER_MAX_LINE_SIZE];
   int stf_output_count;
+  int stf_dump_grids;
+  int stf_density_grids_grid_dim;
+  char stf_density_grids_grid_method[PARSER_MAX_LINE_SIZE];
 
   /* extra structure finding information, allows for multiple dumps */
   /* in multiple directories, maximum of 10. */
@@ -542,6 +545,7 @@ void engine_check_for_index_dump(struct engine *e);
 void engine_collect_end_of_step(struct engine *e, int apply);
 void engine_dump_snapshot(struct engine *e);
 void engine_dump_density_grids(struct engine *e);
+void engine_dump_stf_density_grids(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params);
 void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  long long Ngas, long long Ngparts, long long Nstars,
