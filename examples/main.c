@@ -583,10 +583,6 @@ int main(int argc, char *argv[]) {
 #ifdef WITH_MPI
   if (with_mpole_reconstruction && nr_nodes > 1)
     error("Cannot reconstruct m-poles every step over MPI (yet).");
-  if (with_timestep_limiter)
-    error("Can't run with time-step limiter over MPI (yet)");
-  if (with_timestep_sync)
-    error("Can't run with time-step synchronization over MPI (yet)");
 #ifdef WITH_LOGGER
   error("Can't run with the particle logger over MPI (yet)");
 #endif
@@ -858,9 +854,9 @@ int main(int argc, char *argv[]) {
 
       /* Initialise the cooling function properties */
 #ifdef COOLING_NONE
-    if (with_cooling || with_temperature) {
+    if (with_cooling) {
       error(
-          "ERROR: Running with cooling / temperature calculation"
+          "ERROR: Running with cooling calculation"
           " but compiled without it.");
     }
 #else
@@ -1300,7 +1296,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Did we exceed the maximal runtime? */
-    if (clocks_get_hours_since_start() > restart_max_hours_runtime) {
+    if (e.runtime > restart_max_hours_runtime) {
       force_stop = 1;
       message("Runtime limit reached, dumping restart files...");
       if (resubmit_after_max_hours) resubmit = 1;
@@ -1419,7 +1415,10 @@ int main(int argc, char *argv[]) {
     }
 #ifdef WITH_LOGGER
     logger_log_all(e.logger, &e);
-    engine_dump_index(&e);
+
+    /* Write a sentinel timestamp */
+    logger_log_timestamp(e.logger, e.ti_current, e.time,
+                         &e.logger->timestamp_offset);
 #endif
 
     /* Write final snapshot? */
@@ -1464,8 +1463,8 @@ int main(int argc, char *argv[]) {
   if (with_verbose_timers) timers_close_file();
   if (with_cosmology) cosmology_clean(e.cosmology);
   if (with_self_gravity) pm_mesh_clean(e.mesh);
-  if (with_cooling || with_temperature) cooling_clean(&cooling_func);
-  if (with_feedback) feedback_clean(&feedback_properties);
+  if (with_cooling || with_temperature) cooling_clean(e.cooling_func);
+  if (with_feedback) feedback_clean(e.feedback_props);
   engine_clean(&e, /*fof=*/0);
   free(params);
 
