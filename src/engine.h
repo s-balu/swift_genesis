@@ -314,6 +314,9 @@ struct engine {
   char stf_base_name[PARSER_MAX_LINE_SIZE];
   char stf_subdir_per_output[PARSER_MAX_LINE_SIZE];
   int stf_output_count;
+  int stf_dump_grids;
+  int stf_density_grids_grid_dim;
+  char stf_density_grids_grid_method[PARSER_MAX_LINE_SIZE];
 
   /* extra structure finding information, allows for multiple dumps */
   /* in multiple directories, maximum of 10. */
@@ -332,6 +335,19 @@ struct engine {
   char stf_config_file_name_extra[10][PARSER_MAX_LINE_SIZE];
   char stf_base_name_extra[10][PARSER_MAX_LINE_SIZE];
   int stf_output_count_extra[10];
+
+  /* density grid information */
+  int density_grids_dump_grids;
+  char density_grids_base_name[PARSER_MAX_LINE_SIZE];
+  char density_grids_subdir[PARSER_MAX_LINE_SIZE];
+  int density_grids_grid_dim;
+  char density_grids_grid_method[PARSER_MAX_LINE_SIZE];
+  double a_first_density_grids_output;
+  double time_first_density_grids_output;
+  double delta_time_density_grids;
+  integertime_t ti_next_density_grids;
+  struct output_list *output_list_density_grids;
+  int density_grids_output_count;
 
   /* FoF black holes seeding information */
   double a_first_fof_call;
@@ -525,6 +541,8 @@ void engine_check_for_dumps(struct engine *e);
 void engine_check_for_index_dump(struct engine *e);
 void engine_collect_end_of_step(struct engine *e, int apply);
 void engine_dump_snapshot(struct engine *e);
+void engine_dump_density_grids(struct engine *e);
+void engine_dump_stf_density_grids(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params);
 void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  long long Ngas, long long Ngparts, long long Nstars,
