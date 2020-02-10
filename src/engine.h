@@ -77,9 +77,10 @@ enum engine_policy {
   engine_policy_black_holes = (1 << 19),
   engine_policy_fof = (1 << 20),
   engine_policy_timestep_limiter = (1 << 21),
-  engine_policy_timestep_sync = (1 << 22)
+  engine_policy_timestep_sync = (1 << 22),
+  engine_policy_produce_density_grids = (1 << 23)
 };
-#define engine_maxpolicy 23
+#define engine_maxpolicy 24
 extern const char *engine_policy_names[engine_maxpolicy + 1];
 
 /**
@@ -116,6 +117,7 @@ enum engine_step_properties {
 #define engine_tasks_per_cell_margin 1.2
 #define engine_default_stf_subdir_per_output ""
 #define engine_default_snapshot_subdir ""
+#define engine_default_density_grids_subdir_per_output ""
 
 /**
  * @brief The rank of the engine as a global variable (for messages).
@@ -527,6 +529,7 @@ void engine_barrier(struct engine *e);
 void engine_compute_next_snapshot_time(struct engine *e);
 void engine_compute_next_stf_time(struct engine *e);
 void engine_compute_next_stf_time_extra_outputs(struct engine *e);
+void engine_compute_next_density_grids_time(struct engine *e);
 void engine_compute_next_fof_time(struct engine *e);
 void engine_compute_next_statistics_time(struct engine *e);
 void engine_recompute_displacement_constraint(struct engine *e);

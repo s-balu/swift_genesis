@@ -780,7 +780,7 @@ void darkmatter_write_stf_density_grids_outputs(struct engine* e, const size_t N
     construct_grid_mapper = &construct_grid_CIC_mapper;
 } else if (strncmp(e->stf_density_grids_grid_method, "NGP", 3) != 0) {
     message(
-        "WARNING: Unknown snapshot gridding method (Snapshots:grid_method). "
+        "WARNING: Unknown snapshot gridding method (StructureFinding:grid_method). "
         "Falling back to NGP.");
   }
 
@@ -1126,6 +1126,7 @@ void prepare_stf_density_grids_file(struct engine* e, const char* baseName, long
                   const struct unit_system* snapshot_units) {
 
   int numFiles = 1;
+
 
   /* HDF5 File name */
   char fileName[FILENAME_BUFFER_SIZE];
@@ -1486,7 +1487,7 @@ void write_stf_grids_parallel(struct engine* e, const char* baseName,
   /* HDF5 File name */
   char fileName[FILENAME_BUFFER_SIZE];
   snprintf(fileName, FILENAME_BUFFER_SIZE, "%s_%04i.hdf5", baseName,
-             e->density_grids_output_count);
+             e->stf_output_count-1);
 
   /* Prepare some file-access properties */
   hid_t plist_id = H5Pcreate(H5P_FILE_ACCESS);

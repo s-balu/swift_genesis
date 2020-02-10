@@ -2431,7 +2431,8 @@ void engine_check_for_dumps(struct engine *e) {
     output_snapshot,
     output_statistics,
     output_stf,
-    output_stf_extra
+    output_stf_extra,
+    output_density_grids
   };
 
   /* What kind of output do we want? And at which time ?
@@ -3786,9 +3787,9 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
     halo catalogs */
     if (e->policy & engine_policy_produce_density_grids) {
         e->stf_dump_grids =
-            parser_get_opt_param_int(params, "StructureFinding:DensityGrids:dump_grids", 0);
-        e->stf_density_grids_grid_dim = parser_get_opt_param_int(params, "StructureFinding:DensityGrids:grid_dim", 128);
-        parser_get_opt_param_string(params, "DensityGrids:grid_method",
+            parser_get_opt_param_int(params, "StructureFinding:dump_grids", 0);
+        e->stf_density_grids_grid_dim = parser_get_opt_param_int(params, "StructureFinding:grid_dim", 128);
+        parser_get_opt_param_string(params, "StructureFinding:grid_method",
                                 e->stf_density_grids_grid_method, "NGP");
     }
 
