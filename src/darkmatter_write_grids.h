@@ -12,7 +12,7 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
                   const struct unit_system* internal_units,
                   const struct unit_system* snapshot_units,
                   const int output_count,
-                  bool iproducexmf = false
+                  bool iproducexmf
               );
 // void prepare_stf_density_grids_file(struct engine* e, const char* baseName, long long N_total[6],
 //                 const struct unit_system* internal_units,

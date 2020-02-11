@@ -927,7 +927,7 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
                   const struct unit_system* internal_units,
                   const struct unit_system* snapshot_units,
                   const int output_count,
-                  const bool iproducexmf = false
+                  const bool iproducexmf
               ) {
 
   FILE* xmfFile = 0;
@@ -1544,7 +1544,7 @@ void write_grids_parallel(struct engine* e, const char* baseName,
   }
 
   // darkmatter_write_density_grids_outputs(e, Ndm_written, h_file, internal_units, snapshot_units);
-  darkmatter_write_density_grids(e, Ndm_written, h_file,
+  darkmatter_write_grids(e, Ndm_written, h_file,
       internal_units, snapshot_units,
       e->density_grids_grid_dim, e->density_grids_grid_method
   );
@@ -1619,10 +1619,9 @@ void write_stf_grids_parallel(struct engine* e, const char* baseName,
 
   /* Rank 0 prepares the file */
   if (mpi_rank == 0)
-    prepare_stf_density_grids_file(e, baseName, N_total,
+    prepare_density_grids_file(e, baseName, N_total,
         internal_units, snapshot_units,
-        e->stf_output_count-1
-    );
+        e->stf_output_count-1, false);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -1673,7 +1672,7 @@ void write_stf_grids_parallel(struct engine* e, const char* baseName,
   if (h_file < 0) error("Error while opening file '%s'.", fileName);
 
   // darkmatter_write_stf_density_grids_outputs(e, Ndm_written, h_file, internal_units, snapshot_units);
-  darkmatter_write_density_grids_outputs(e, Ndm_written, h_file,
+  darkmatter_write_grids(e, Ndm_written, h_file,
       internal_units, snapshot_units,
       e->stf_density_grids_grid_dim, e->stf_density_grids_grid_method
   );
