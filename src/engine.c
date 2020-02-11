@@ -74,6 +74,7 @@
 #include "map.h"
 #include "memuse.h"
 #include "minmax.h"
+#include "mpiuse.h"
 #include "outputlist.h"
 #include "parallel_io.h"
 #include "part.h"
@@ -3575,6 +3576,11 @@ static void *engine_dumper_poll(void *p) {
       /* Dump the currently logged memory. */
       message("Dumping memory use report");
       memuse_log_dump_error(e->nodeID);
+#endif
+
+#if defined(SWIFT_MPIUSE_REPORTS) && defined(WITH_MPI)
+      /* Dump the MPI interactions in the step. */
+      mpiuse_log_dump_error(e->nodeID);
 #endif
 
       /* Add more interesting diagnostics. */
