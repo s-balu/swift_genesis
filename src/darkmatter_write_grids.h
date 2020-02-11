@@ -21,7 +21,7 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
 void darkmatter_write_grids(struct engine* e, const size_t Npart,
                             const hid_t h_file,
                             const struct unit_system* internal_units,
-                            const struct unit_system* snapshot_units
+                            const struct unit_system* snapshot_units, 
                             const int grid_dim,
                             const char grid_method[PARSER_MAX_LINE_SIZE]
                         );
