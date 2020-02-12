@@ -1690,7 +1690,7 @@ void write_output_parallel(struct engine* e, const char* baseName,
 
           if (e->snapshot_dump_grids)
             darkmatter_write_grids(e, Ndm_written, h_file, internal_units,
-                                   snapshot_units);
+                                   snapshot_units, e->snapshot_grid_dim, e->snapshot_grid_method);
 
           if (with_fof) {
             num_fields += fof_write_gparts(gparts, list + num_fields);
