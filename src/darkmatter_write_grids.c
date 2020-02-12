@@ -265,12 +265,10 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   /* attach an attribute with the gridding type */
   H5LTset_attribute_string(h_file, group_name, "gridding_method", e->snapshot_grid_method);
 
-  int i_rank, n_ranks;
-#ifdef USE_MPI
+  int i_rank = 0, n_ranks = 1;
+#ifdef WITH_MPI
   MPI_Comm_rank(MPI_COMM_WORLD, &i_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &n_ranks);
-#else
-  i_rank = 0; n_ranks = 1;
 #endif
 
   /* split the write into slabs on the x axis */
@@ -354,59 +352,16 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
         construct_grid_mapper, gparts, Npart,
         sizeof(struct gpart), 0, (void*)&extra_data);
 
-    //??? silly debug statements
-    for (int itask = 0; itask<n_rank; itask++) {
-        if (itask == i_rank) {
-            printf("%d mpi local density field has following \n", i_rank);
-            for (int ii = 0; ii < n_grid_points; ++ii) {
-                if (point_counts[ii] == 0) {
-                    printf("%d mpi local density first zero at %d \n", i_rank, ii);
-                    break;
-                }
-            }
-            for (int ii = 0; ii < n_grid_points; ++ii) {
-                if (point_counts[ii] > 0) {
-                    printf("%d mpi local density first non-zero at %d \n", i_rank, ii);
-                    break;
-                }
-            }
-        }
-#ifdef USE_MPI
-MPI_Barrier(MPI_COMM_WORLD);
-#endif
-    }
-
     /* Do any necessary conversions */
     switch (grid_type) {
       double n_to_density;
       double unit_conv_factor;
       case DENSITY:
-#ifdef USE_MPI
+#ifdef WITH_MPI
         /* reduce the grid */
         MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_DOUBLE,
                       MPI_SUM, MPI_COMM_WORLD);
 #endif
-
-for (int itask = 0; itask<n_rank; itask++) {
-    if (itask == i_rank) {
-        printf("%d mpi updated global density field has following \n", i_rank);
-        for (int ii = 0; ii < n_grid_points; ++ii) {
-            if (point_counts[ii] == 0) {
-                printf("%d mpi updated global density first zero at %d \n", i_rank, ii);
-                break;
-            }
-        }
-        for (int ii = 0; ii < n_grid_points; ++ii) {
-            if (point_counts[ii] > 0) {
-                printf("%d mpi updated global density first non-zero at %d \n", i_rank, ii);
-                break;
-            }
-        }
-    }
-#ifdef USE_MPI
-MPI_Barrier(MPI_COMM_WORLD);
-#endif
-}
 
         /* convert n_particles to density */
         unit_conv_factor = units_conversion_factor(
@@ -421,7 +376,7 @@ MPI_Barrier(MPI_COMM_WORLD);
       case VELOCITY_X:
       case VELOCITY_Y:
       case VELOCITY_Z:
-#ifdef USE_MPI
+#ifdef WITH_MPI
         /* reduce the grid */
         MPI_Allreduce(MPI_IN_PLACE, grid, n_grid_points, MPI_DOUBLE, MPI_SUM,
                       MPI_COMM_WORLD);
