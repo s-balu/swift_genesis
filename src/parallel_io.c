@@ -1940,7 +1940,6 @@ void write_output_parallel(struct engine* e, const char* baseName,
 #endif
 
   e->snapshot_output_count++;
-  if (e->snapshot_invoke_stf) e->stf_output_count++;
 }
 
 #endif /* HAVE_HDF5 */
