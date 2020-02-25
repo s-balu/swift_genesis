@@ -1089,7 +1089,7 @@ if test "x$with_python" != "xno"; then
       # use linux default python
       with_python="/usr/"
    fi
-   AM_PATH_PYTHON([3], [], [AC_MSG_ERROR(python not found)])   
+   AM_PATH_PYTHON([3], [], [AC_MSG_ERROR(python not found)])
    AC_ARG_VAR([PYTHON_INCS], [Include flags for python, bypassing python-config])
    AC_ARG_VAR([PYTHON_CONFIG], [Path to python-config])
    AS_IF([test -z "$PYTHON_INCS"], [
@@ -1227,6 +1227,7 @@ if test "x$with_velociraptor" != "xno"; then
 fi
 AC_SUBST([VELOCIRAPTOR_LIBS])
 AM_CONDITIONAL([HAVEVELOCIRAPTOR],[test -n "$VELOCIRAPTOR_LIBS"])
+
 # Check for dummy VELOCIraptor.
 AC_ARG_ENABLE([dummy-velociraptor],
     [AS_HELP_STRING([--enable-dummy-velociraptor],
@@ -1241,6 +1242,21 @@ if test "$enable_dummy_velociraptor" = "yes"; then
 
   AC_DEFINE(HAVE_VELOCIRAPTOR,1,[The VELOCIraptor library appears to be present.])
   AC_DEFINE(HAVE_DUMMY_VELOCIRAPTOR,1,[The dummy VELOCIraptor library is present.])
+fi
+
+# Now that we found VELOCIraptor, let's check how it was compiled.
+if test "$have_velociraptor" == "yes"; then
+    AC_CHECK_LIB(
+       [velociraptor],
+       [VR_NOMASS],
+       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_NOMASS],1,[The VELOCIraptor library appears to be present and has been compiled with the NOMASS option. Only useful if running a uniform box.])],
+       [AC_MSG_RESULT(VELOCIraptor not compiled to so as to *not* store masses per particle.)],
+       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
+    )
+    AC_CHECK_DECL(
+        [HAVE_VELOCIRAPTOR_WITH_NOMASS],
+        [have_velociraptor_with_nomass="yes"]
+    )
 fi
 
 if test "$have_velociraptor" == "yes"; then
@@ -1282,19 +1298,6 @@ if test "$have_velociraptor" == "yes"; then
     AC_CHECK_DECL(
         [HAVE_VELOCIRAPTOR_WITH_BH],
         [have_velociraptor_with_bh="yes"]
-    )
-fi
-if test "$have_velociraptor" == "yes"; then
-    AC_CHECK_LIB(
-       [velociraptor],
-       [VR_NOMASS],
-       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_NOMASS],1,[The VELOCIraptor library appears to be present and has been compiled with the NOMASS option. Only useful if running a uniform box.])],
-       [AC_MSG_RESULT(VELOCIraptor not compiled to so as to not store masses per particle.)],
-       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
-    )
-    AC_CHECK_DECL(
-        [HAVE_VELOCIRAPTOR_WITH_NOMASS],
-        [have_velociraptor_with_nomass="yes"]
     )
 fi
 
