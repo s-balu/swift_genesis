@@ -259,6 +259,7 @@ void engine_repartition_trigger(struct engine *e) {
 
   const ticks tic = getticks();
   static int opened = 0;
+  if (e->restarting) opened = 1;
 
   /* Do nothing if there have not been enough steps since the last repartition
    * as we don't want to repeat this too often or immediately after a
@@ -1571,6 +1572,28 @@ void engine_rebuild(struct engine *e, int repartitioned,
         e->s->nr_cells, e->s->tot_cells,
         (e->s->nr_cells + e->s->tot_cells) * sizeof(struct gravity_tensors) /
             (1024 * 1024));
+
+  /* Report the number of particles and memory */
+  if (e->verbose)
+    message(
+        "Space has memory for %zd/%zd/%zd/%zd part/gpart/spart/bpart "
+        "(%zd/%zd/%zd/%zd MB)",
+        e->s->size_parts, e->s->size_gparts, e->s->size_sparts,
+        e->s->size_bparts,
+        e->s->size_parts * sizeof(struct part) / (1024 * 1024),
+        e->s->size_gparts * sizeof(struct gpart) / (1024 * 1024),
+        e->s->size_sparts * sizeof(struct spart) / (1024 * 1024),
+        e->s->size_bparts * sizeof(struct bpart) / (1024 * 1024));
+
+  if (e->verbose)
+    message(
+        "Space holds %zd/%zd/%zd/%zd part/gpart/spart/bpart (fracs: "
+        "%f/%f/%f/%f)",
+        e->s->nr_parts, e->s->nr_gparts, e->s->nr_sparts, e->s->nr_bparts,
+        e->s->nr_parts ? e->s->nr_parts / ((double)e->s->size_parts) : 0.,
+        e->s->nr_gparts ? e->s->nr_gparts / ((double)e->s->size_gparts) : 0.,
+        e->s->nr_sparts ? e->s->nr_sparts / ((double)e->s->size_sparts) : 0.,
+        e->s->nr_bparts ? e->s->nr_bparts / ((double)e->s->size_bparts) : 0.);
 
   const ticks tic2 = getticks();
 
@@ -3824,9 +3847,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
   units_init_default(e->snapshot_units, params, "Snapshots", internal_units);
   e->snapshot_output_count = 0;
   e->stf_output_count = 0;
-  if (e->num_extra_stf_outputs){
-    for (int i=0;i<e->num_extra_stf_outputs;i++) e->stf_output_count_extra[i] = 0;
-  }
+  bzero(e->stf_output_count_extra, 10 * sizeof(int));
 
   e->dt_min = parser_get_param_double(params, "TimeIntegration:dt_min");
   e->dt_max = parser_get_param_double(params, "TimeIntegration:dt_max");
@@ -3841,9 +3862,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
       parser_get_param_double(params, "Statistics:delta_time");
   e->ti_next_stats = 0;
   e->ti_next_stf = 0;
-  if (e->num_extra_stf_outputs){
-    for (int i=0;i<e->num_extra_stf_outputs;i++) e->ti_next_stf_extra[i] = 0;
-  }
+  bzero(e->ti_next_stf_extra, 10 * sizeof(integertime_t));
   e->ti_next_density_grids = 0;
   e->ti_next_fof = 0;
   e->verbose = verbose;
@@ -4971,7 +4990,7 @@ void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
     for (int i=0;i<e->num_extra_stf_outputs; i++) {
       /* Do output_list file case */
       if (e->output_list_stf_extra[i]) {
-        output_list_read_next_time(e->output_list_stf_extra[i], e, "stf", &e->ti_next_stf_extra[i]);
+        output_list_read_next_time(e->output_list_stf_extra[i], e, "stf_extra", &e->ti_next_stf_extra[i]);
         continue;
       }
 
