@@ -124,7 +124,7 @@ const char *engine_policy_names[] = {"none",
                                      "fof search",
                                      "time-step limiter",
                                      "time-step sync",
-                                     "logger"};
+                                     "logger",
                                      "density grids"};
 
 /** The rank of the engine as a global variable (for messages). */
