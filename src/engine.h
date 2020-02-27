@@ -78,6 +78,7 @@ enum engine_policy {
   engine_policy_fof = (1 << 20),
   engine_policy_timestep_limiter = (1 << 21),
   engine_policy_timestep_sync = (1 << 22),
+  engine_policy_logger = (1 << 23),
   engine_policy_produce_density_grids = (1 << 23)
 };
 #define engine_maxpolicy 24
