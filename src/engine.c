@@ -377,9 +377,16 @@ void engine_repartition_trigger(struct engine *e) {
 
         } else {
           /* Not repartitioning, would that have been done otherwise? */
-          if (e->verbose)
-            message("trigger fraction %.3f > %.3f would have repartitioned",
-                    balance, abs_trigger);
+          if (e->verbose) {
+            if (balance > abs_trigger) {
+              message("trigger fraction %.3f > %.3f would have repartitioned",
+                      balance, abs_trigger);
+            } else {
+              message(
+                  "trigger fraction %.3f =< %.3f would not have repartitioned",
+                  balance, abs_trigger);
+            }
+          }
         }
 
         /* Keep logs of all CPU times and resident memory size for debugging
@@ -1258,6 +1265,9 @@ void engine_allocate_foreign_particles(struct engine *e) {
 #ifdef WITH_MPI
 
   const int nr_proxies = e->nr_proxies;
+  const int with_hydro = e->policy & engine_policy_hydro;
+  const int with_stars = e->policy & engine_policy_stars;
+  const int with_black_holes = e->policy & engine_policy_black_holes;
   struct space *s = e->s;
   ticks tic = getticks();
 
@@ -1285,6 +1295,17 @@ void engine_allocate_foreign_particles(struct engine *e) {
       count_bparts_in += e->proxies[k].cells_in[j]->black_holes.count;
     }
   }
+
+  if (!with_hydro && count_parts_in)
+    error(
+        "Not running with hydro but about to receive gas particles in "
+        "proxies!");
+  if (!with_stars && count_sparts_in)
+    error("Not running with stars but about to receive stars in proxies!");
+  if (!with_black_holes && count_bparts_in)
+    error(
+        "Not running with black holes but about to receive black holes in "
+        "proxies!");
 
   if (e->verbose)
     message("Counting number of foreign particles took %.3f %s.",
@@ -1367,14 +1388,20 @@ void engine_allocate_foreign_particles(struct engine *e) {
         gparts = &gparts[count_gparts];
       }
 
-      /* For stars, we just use the numbers in the top-level cells */
-      cell_link_sparts(e->proxies[k].cells_in[j], sparts);
-      sparts =
-          &sparts[e->proxies[k].cells_in[j]->stars.count + space_extra_sparts];
+      if (with_stars) {
 
-      /* For black holes, we just use the numbers in the top-level cells */
-      cell_link_bparts(e->proxies[k].cells_in[j], bparts);
-      bparts = &bparts[e->proxies[k].cells_in[j]->black_holes.count];
+        /* For stars, we just use the numbers in the top-level cells */
+        cell_link_sparts(e->proxies[k].cells_in[j], sparts);
+        sparts = &sparts[e->proxies[k].cells_in[j]->stars.count +
+                         space_extra_sparts];
+      }
+
+      if (with_black_holes) {
+
+        /* For black holes, we just use the numbers in the top-level cells */
+        cell_link_bparts(e->proxies[k].cells_in[j], bparts);
+        bparts = &bparts[e->proxies[k].cells_in[j]->black_holes.count];
+      }
     }
   }
 
@@ -4699,7 +4726,7 @@ void engine_config(int restart, int fof, struct engine *e,
 
   /* Estimated number of links per tasks */
   e->links_per_tasks =
-      parser_get_opt_param_int(params, "Scheduler:links_per_tasks", 25);
+      parser_get_opt_param_float(params, "Scheduler:links_per_tasks", 25.);
 
   /* Init the scheduler. */
   scheduler_init(&e->sched, e->s, maxtasks, nr_queues,
