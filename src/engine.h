@@ -78,9 +78,10 @@ enum engine_policy {
   engine_policy_fof = (1 << 20),
   engine_policy_timestep_limiter = (1 << 21),
   engine_policy_timestep_sync = (1 << 22),
-  engine_policy_produce_density_grids = (1 << 23)
+  engine_policy_logger = (1 << 23),
+  engine_policy_produce_density_grids = (1 << 24)
 };
-#define engine_maxpolicy 24
+#define engine_maxpolicy 25
 extern const char *engine_policy_names[engine_maxpolicy + 1];
 
 /**
@@ -442,7 +443,7 @@ struct engine {
 
   /* Average number of links per tasks. This number is used before
      the creation of communication tasks so needs to be large enough. */
-  size_t links_per_tasks;
+  float links_per_tasks;
 
   /* Are we talkative ? */
   int verbose;

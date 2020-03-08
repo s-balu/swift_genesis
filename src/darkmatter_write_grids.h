@@ -7,12 +7,13 @@
 #include "units.h"
 #include "common_io.h"
 #include "xmf.h"
+#include <stdbool.h> 
 
 void prepare_density_grids_file(struct engine* e, const char* baseName, long long N_total[6],
                   const struct unit_system* internal_units,
                   const struct unit_system* snapshot_units,
                   const int output_count,
-                  bool iproducexmf
+                  const bool iproducexmf
               );
 // void prepare_stf_density_grids_file(struct engine* e, const char* baseName, long long N_total[6],
 //                 const struct unit_system* internal_units,
@@ -21,7 +22,7 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
 void darkmatter_write_grids(struct engine* e, const size_t Npart,
                             const hid_t h_file,
                             const struct unit_system* internal_units,
-                            const struct unit_system* snapshot_units, 
+                            const struct unit_system* snapshot_units,
                             const int grid_dim,
                             const char grid_method[PARSER_MAX_LINE_SIZE]
                         );
