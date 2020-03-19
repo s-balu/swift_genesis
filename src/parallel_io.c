@@ -44,7 +44,6 @@
 #include "darkmatter_write_grids.h"
 #include "dimension.h"
 #include "engine.h"
-#include "entropy_floor.h"
 #include "error.h"
 #include "feedback.h"
 #include "fof_io.h"
@@ -1153,6 +1152,9 @@ void prepare_file(struct engine* e, const char* baseName, long long N_total[6],
 
   /* Print the run's policy */
   io_write_engine_policy(h_file, e);
+
+  /* Print the physical constants */
+  phys_const_print_snapshot(h_file, e->physical_constants);
 
   /* Print the SPH parameters */
   if (e->policy & engine_policy_hydro) {
