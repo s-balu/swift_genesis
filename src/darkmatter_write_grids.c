@@ -28,8 +28,9 @@
 __attribute__((always_inline)) INLINE static unsigned long long row_major_id_periodic(int i,
                                                                        int j,
                                                                        int k,
-                                                                       unsigned long long N) {
-  return (((i + N) % N) * N * N + ((j + N) % N) * N + ((k + N) % N));
+                                                                       int N) {
+  unsigned long long ii = i, jj = j, kk = k, NN = N;
+  return (((ii + NN) % NN) * NN * NN + ((jj + NN) % NN) * NN + ((kk + NN) % NN));
 }
 
 // TODO(smutch): Make this available from `mesh_gravity.c`
@@ -233,7 +234,8 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
                         ) {
 
   struct gpart* gparts = e->s->gparts;
-  const unsigned long long n_grid_points = grid_dim * grid_dim * grid_dim;
+  const unsigned long long gd = grid_dim;
+  const unsigned long long n_grid_points = gd * gd * gd;
   const double* box_size = e->s->dim;
   char dataset_name[DS_NAME_SIZE] = "";
 
