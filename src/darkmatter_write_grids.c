@@ -246,14 +246,14 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   float* grid = NULL;
   if (swift_memalign("writegrid", (void**)&grid, IO_BUFFER_ALIGNMENT,
                      n_grid_points * sizeof(float)) != 0)
-    error("Failed to allocate output DM grids! Requesting %lld and %f GB of memory", n_grid_points, n_grid_points*sizeof(float)/1024.0/1024./1024.);
+    error("Failed to allocate output DM grids! Requesting %d grid_dim giving %llu and %f GB of memory", grid_dim, n_grid_points, n_grid_points*sizeof(float)/1024.0/1024./1024.);
   memset(grid, 0, n_grid_points * sizeof(float));
 
   /* Array to be used to store particle counts at all grid points. */
   float* point_counts = NULL;
   if (swift_memalign("countgrid", (void**)&point_counts, IO_BUFFER_ALIGNMENT,
                      n_grid_points * sizeof(float)) != 0) {
-    error("Failed to allocate point counts! Requesting %lld and %f GB of memory", n_grid_points, n_grid_points*sizeof(float)/1024.0/1024./1024.);
+    error("Failed to allocate point counts! Requesting %d grid_dim giving %llu and %f GB of memory", grid_dim, n_grid_points, n_grid_points*sizeof(float)/1024.0/1024./1024.);
   }
   memset(point_counts, 0, n_grid_points * sizeof(float));
 
