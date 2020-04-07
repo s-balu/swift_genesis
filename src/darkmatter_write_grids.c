@@ -29,8 +29,11 @@ __attribute__((always_inline)) INLINE static unsigned long long row_major_id_per
                                                                        int j,
                                                                        int k,
                                                                        int N) {
-  unsigned long long ii = i, jj = j, kk = k, NN = N;
-  return (((ii + NN) % NN) * NN * NN + ((jj + NN) % NN) * NN + ((kk + NN) % NN));
+  unsigned long long ii = (unsigned long long)((i + N) % N);
+  unsigned long long jj = (unsigned long long)((j + N) % N);
+  unsigned long long kk = (unsigned long long)((k + N) % N);
+  unsigned long long NN = (unsigned long long)N;
+  return (ii * NN * NN + jj * NN + kk);
 }
 
 // TODO(smutch): Make this available from `mesh_gravity.c`
@@ -51,7 +54,7 @@ __attribute__((always_inline)) INLINE static unsigned long long row_major_id_per
  * @param value The value to interpolate.
  */
 __attribute__((always_inline)) INLINE static void CIC_set(
-    float* mesh, unsigned long long N, int i, int j, int k,
+    float* mesh, int N, int i, int j, int k,
     float tx, float ty, float tz,
     float dx, float dy, float dz, float value) {
 
@@ -116,7 +119,7 @@ __attribute__((always_inline)) INLINE static void part_to_grid_CIC(
   if (k < 0 || k >= dim) error("Invalid gpart position in z");
 #endif
 
-  const double val = (prop_offset < 0) ? 1.0 : *(float*)((char *)gp + prop_offset);
+  const float val = (prop_offset < 0) ? 1.0 : *(float*)((char *)gp + prop_offset);
 
   /* CIC ! */
   CIC_set(grid, dim, i, j, k, tx, ty, tz, dx, dy, dz, val);
@@ -172,7 +175,7 @@ static void construct_grid_CIC_mapper(void* restrict gparts_v, int N,
  * @param grid_dim The dimensionality of the grid.
  * @param n_grid_points The total number of points (cells) in the grid (used for checking).
  */
-__attribute__((always_inline)) INLINE static int part_to_grid_index(
+__attribute__((always_inline)) INLINE static unsigned long long part_to_grid_index(
     const struct gpart* gp, const double cell_size[3], const double grid_dim,
     const unsigned long long n_grid_points) {
   int coord[3] = {-1, -1, -1};
@@ -183,8 +186,6 @@ __attribute__((always_inline)) INLINE static int part_to_grid_index(
 
   unsigned long long index = row_major_id_periodic(coord[0], coord[1], coord[2], grid_dim);
   assert((index < n_grid_points));
-  // assert((0 <= index) && (index < n_grid_points));
-
   return index;
 }
 
@@ -210,7 +211,7 @@ static void construct_grid_NGP_mapper(void* restrict gparts_v, int N,
 
   for (int ii = 0; ii < N; ++ii) {
     const struct gpart* gp = &(gparts[ii]);
-    int index = part_to_grid_index(gp, cell_size, grid_dim, n_grid_points);
+    unsigned long long index = part_to_grid_index(gp, cell_size, grid_dim, n_grid_points);
     const float val = (prop_offset < 0) ? 1.0 : *(float*)((char *)gp + prop_offset);
     atomic_add_f(&(grid[index]), val);
   }
@@ -234,7 +235,7 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
                         ) {
 
   struct gpart* gparts = e->s->gparts;
-  const unsigned long long gd = grid_dim;
+  const unsigned long long gd = (unsigned long long)grid_dim;
   const unsigned long long n_grid_points = gd * gd * gd;
   const double* box_size = e->s->dim;
   char dataset_name[DS_NAME_SIZE] = "";
@@ -247,8 +248,9 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   /* array to be used for all grids */
   float* grid = NULL;
   if (swift_memalign("writegrid", (void**)&grid, IO_BUFFER_ALIGNMENT,
-                     n_grid_points * sizeof(float)) != 0)
+                     n_grid_points * sizeof(float)) != 0) {
     error("Failed to allocate output DM grids! Requesting %d grid_dim giving %llu and %f GB of memory", grid_dim, n_grid_points, n_grid_points*sizeof(float)/1024.0/1024./1024.);
+  }
   memset(grid, 0, n_grid_points * sizeof(float));
 
   /* Array to be used to store particle counts at all grid points. */
@@ -353,6 +355,7 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
         extra_data.prop_offset = offsetof(struct gpart, v_full[2]);
         break;
     }
+
     threadpool_map((struct threadpool*)&e->threadpool,
         construct_grid_mapper, gparts, Npart,
         sizeof(struct gpart), 0, (void*)&extra_data);
@@ -364,8 +367,23 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       case DENSITY:
 #ifdef WITH_MPI
         /* reduce the grid */
-        MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_FLOAT,
-                      MPI_SUM, MPI_COMM_WORLD);
+        if (n_grid_points > INT_MAX) {
+           // loop over as necessary
+           int nloops = (int)(ceil((double)(n_grid_points)/(double)(INT_MAX)));
+           unsigned long long offset = 0;
+           int ncount = INT_MAX;
+           for (int iloop = 0; iloop < nloops; iloop++){
+              MPI_Allreduce(MPI_IN_PLACE, &point_counts[offset], ncount, MPI_FLOAT,
+                            MPI_SUM, MPI_COMM_WORLD);
+              offset += ncount;
+              if (iloop == nloops -2) ncount = n_grid_points - offset;
+              else ncount = INT_MAX;
+           }
+        }
+        else {
+          MPI_Allreduce(MPI_IN_PLACE, point_counts, n_grid_points, MPI_FLOAT,
+                        MPI_SUM, MPI_COMM_WORLD);
+        }
 #endif
 
         /* convert n_particles to density */
@@ -383,8 +401,23 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
       case VELOCITY_Z:
 #ifdef WITH_MPI
         /* reduce the grid */
-        MPI_Allreduce(MPI_IN_PLACE, grid, n_grid_points, MPI_FLOAT, MPI_SUM,
-                      MPI_COMM_WORLD);
+        if (n_grid_points > INT_MAX) {
+           // loop over as necessary
+           int nloops = (int)(ceil((double)(n_grid_points)/(double)(INT_MAX)));
+           unsigned long long offset = 0;
+           int ncount = INT_MAX;
+           for (int iloop = 0; iloop < nloops; iloop++){
+              MPI_Allreduce(MPI_IN_PLACE, &grid[offset], ncount, MPI_FLOAT,
+                            MPI_SUM, MPI_COMM_WORLD);
+              offset += ncount;
+              if (iloop == nloops - 2) ncount = n_grid_points - offset;
+              else ncount = INT_MAX;
+           }
+        }
+        else {
+          MPI_Allreduce(MPI_IN_PLACE, grid, n_grid_points, MPI_FLOAT,
+                        MPI_SUM, MPI_COMM_WORLD);
+        }
 #endif
 
         /* take the mean */
@@ -416,23 +449,17 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
         break;
     }
 
-    /* we can use the same allocations but down cast the data to floats for writing */
-    float *f_grid = (float *)grid;
-    for(unsigned long long ii=0; ii<n_grid_points; ++ii) {
-        f_grid[ii] = (float)grid[ii];
-    }
-
     /* actually do the write finally! */
     hid_t dset_id = H5Dcreate(h_grp, dataset_name, H5T_NATIVE_FLOAT, fspace_id,
                               H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
-
+     unsigned long long local_grid_offset = row_major_id_periodic(local_offset, 0, 0, grid_dim);
     H5Dwrite(dset_id, H5T_NATIVE_FLOAT, memspace_id, fspace_id, plist_id,
-             &f_grid[row_major_id_periodic(local_offset, 0, 0, grid_dim)]);
+             &grid[local_grid_offset]);
     H5Dclose(dset_id);
 
     /* reset the grid if necessary */
     if (grid_type != VELOCITY_Z) {
-      memset(grid, 0, n_grid_points * sizeof(double));
+      memset(grid, 0, n_grid_points * sizeof(float));
     }
   }
 
