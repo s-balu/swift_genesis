@@ -2969,6 +2969,16 @@ void engine_check_for_dumps(struct engine *e) {
       }
     }
 
+    /* Do we want to produce a density grid? */
+    if (with_density_grids) {
+        if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
+          if (e->ti_next_density_grids < ti_output) {
+            ti_output = e->ti_next_density_grids;
+            type = output_density_grids;
+        }
+      }
+    }
+
   } /* While loop over output types */
 
   /* Restore the information we stored */
