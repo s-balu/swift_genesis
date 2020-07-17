@@ -725,7 +725,7 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   if (strnlen(e->stf_subdir_per_output, PARSER_MAX_LINE_SIZE) > 0) {
     if (snprintf(subDirName, FILENAME_BUFFER_SIZE, "%s%s_%04i/", outputDirName,
                  e->stf_subdir_per_output,
-                 e->snapshot_output_count) >= FILENAME_BUFFER_SIZE) {
+                 e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
       error(
           "FILENAME_BUFFER_SIZE is to small for Velociraptor directory name!");
     }
