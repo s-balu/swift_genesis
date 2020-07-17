@@ -527,6 +527,9 @@ struct engine {
   /* Has there been an stf this timestep? */
   char stf_this_timestep;
 
+  /* Has there been an density field output this timestep? */
+  char density_field_this_timestep;
+
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   /* Run brute force checks only on steps when all gparts active? */
   int force_checks_only_all_active;

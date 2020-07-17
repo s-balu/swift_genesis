@@ -2770,6 +2770,7 @@ void engine_check_for_dumps(struct engine *e) {
   enum output_type type = output_none;
   integertime_t ti_output = max_nr_timesteps;
   e->stf_this_timestep = 0;
+  e->density_field_this_timestep = 0;
 
   /* Save some statistics ? */
   if (e->ti_end_min > e->ti_next_stats && e->ti_next_stats > 0) {
@@ -3748,6 +3749,7 @@ void engine_dump_density_grids(struct engine *e) {
 
   /* Flag that we dumped a grids */
   e->step_props |= engine_step_prop_density_field;
+  e->density_field_this_timestep = 1;
 
   clocks_gettime(&time2);
   if (e->verbose)
@@ -4097,6 +4099,7 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
   e->fof_properties = fof_properties;
   e->parameter_file = params;
   e->stf_this_timestep = 0;
+  e->density_field_this_timestep = 0;
 #ifdef WITH_MPI
   e->usertime_last_step = 0.0;
   e->systime_last_step = 0.0;

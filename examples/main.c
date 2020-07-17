@@ -1506,7 +1506,13 @@ int main(int argc, char *argv[]) {
       if (e.output_list_stf->final_step_dump && !e.stf_this_timestep)
         velociraptor_invoke(&e, /*linked_with_snap=*/0);
     }
+    else if(with_structure_finding && !e.stf_this_timestep)
+        velociraptor_invoke(&e, /*linked_with_snap=*/0);
 #endif
+    /* write final density field? */
+    if(with_density_grids && !e.density_field_this_timestep)
+      engine_dump_density_grids(&e);
+
   }
 
   /* Remove the stop file if used. Do this anyway, we could have missed the
