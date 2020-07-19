@@ -707,17 +707,32 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   /* Generate directory name for this output - start with snapshot directory, if
    * specified */
   char outputDirName[FILENAME_BUFFER_SIZE] = "";
-  if (strnlen(e->snapshot_subdir, PARSER_MAX_LINE_SIZE) > 0) {
-    if (snprintf(outputDirName, FILENAME_BUFFER_SIZE, "%s/",
-                 e->snapshot_subdir) >= FILENAME_BUFFER_SIZE) {
-      error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
-    }
+  if(linked_with_snap > 0){
+    if (strnlen(e->snapshot_subdir, PARSER_MAX_LINE_SIZE) > 0) {
+      if (snprintf(outputDirName, FILENAME_BUFFER_SIZE, "%s/",
+                   e->snapshot_subdir) >= FILENAME_BUFFER_SIZE) {
+        error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
+      }
 #ifdef WITH_MPI
     if (engine_rank == 0) mkdir(outputDirName, 0777);
     MPI_Barrier(MPI_COMM_WORLD);
 #else
     mkdir(outputDirName, 0777);
 #endif
+    }
+  } else if(linked_with_snap == 0){
+    if (strnlen(e->stf_subdir, PARSER_MAX_LINE_SIZE) > 0) {
+      if (snprintf(outputDirName, FILENAME_BUFFER_SIZE, "%s/",
+                   e->stf_subdir) >= FILENAME_BUFFER_SIZE) {
+        error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
+      }
+#ifdef WITH_MPI
+    if (engine_rank == 0) mkdir(outputDirName, 0777);
+    MPI_Barrier(MPI_COMM_WORLD);
+#else
+    mkdir(outputDirName, 0777);
+#endif
+    }
   }
 
   /* Then create output-specific subdirectory if necessary */
@@ -754,35 +769,35 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   }
 
   /* What should the filename be? */
-  // char outputFileName[FILENAME_BUFFER_SIZE];
-  // if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s%s_%04i.VELOCIraptor",
-  //              subDirName, e->stf_base_name,
-  //              e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
-  //   error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
-  // }
   char outputFileName[FILENAME_BUFFER_SIZE];
-  if (linked_with_snap > 0) {
-    if (snprintf(outputFileName, FILENAME_BUFFER_SIZE,
-             "stf_%s_%04i.VELOCIraptor", e->snapshot_base_name,
-             e->snapshot_output_count) >= FILENAME_BUFFER_SIZE) {
-        error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
-    }
+  if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s%s_%04i.VELOCIraptor",
+               subDirName, e->stf_base_name,
+               e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
+    error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
   }
-  else if (linked_with_snap == 0){
-    if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
-             e->stf_base_name, e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
-        error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
-    }
-  }
-  else if (linked_with_snap <0)
-  {
-    iextraoutput = -linked_with_snap - 1;
-    if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
-             e->stf_base_name_extra[iextraoutput],
-             e->stf_output_count_extra[iextraoutput]) >= FILENAME_BUFFER_SIZE) {
-        error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
-    }
-  }
+  // char outputFileName[FILENAME_BUFFER_SIZE];
+  // if (linked_with_snap > 0) {
+  //   if (snprintf(outputFileName, FILENAME_BUFFER_SIZE,
+  //            "stf_%s_%04i.VELOCIraptor", e->snapshot_base_name,
+  //            e->snapshot_output_count) >= FILENAME_BUFFER_SIZE) {
+  //       error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
+  //   }
+  // }
+  // else if (linked_with_snap == 0){
+  //   if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
+  //            e->stf_base_name, e->stf_output_count) >= FILENAME_BUFFER_SIZE) {
+  //       error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
+  //   }
+  // }
+  // else if (linked_with_snap <0)
+  // {
+  //   iextraoutput = -linked_with_snap - 1;
+  //   if (snprintf(outputFileName, FILENAME_BUFFER_SIZE, "%s_%04i.VELOCIraptor",
+  //            e->stf_base_name_extra[iextraoutput],
+  //            e->stf_output_count_extra[iextraoutput]) >= FILENAME_BUFFER_SIZE) {
+  //       error("FILENAME_BUFFER_SIZE is too small for Velociraptor file name!");
+  //   }
+  // }
 
 
   tic = getticks();

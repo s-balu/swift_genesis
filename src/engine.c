@@ -4161,6 +4161,9 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
   if (e->policy & engine_policy_structure_finding) {
     parser_get_param_string(params, "StructureFinding:basename",
                             e->stf_base_name);
+    parser_get_opt_param_string(params, "StructureFinding:subdir",
+                                e->stf_subdir,
+                                engine_default_stf_subdir);
     parser_get_opt_param_string(params, "StructureFinding:subdir_per_output",
                                 e->stf_subdir_per_output,
                                 engine_default_stf_subdir_per_output);
