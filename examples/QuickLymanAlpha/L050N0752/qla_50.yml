@@ -37,14 +37,16 @@ Statistics:
 
 # Parameters for the self-gravity scheme
 Gravity:
-  eta:                    0.025    # Constant dimensionless multiplier for time integration.
-  theta:                  0.7      # Opening angle (Multipole acceptance criterion)
-  mesh_side_length:       256
+  eta:                         0.025    # Constant dimensionless multiplier for time integration.
+  MAC:                         adaptive
+  epsilon_fmm:                 0.001
+  theta_cr:                    0.7       # Opening angle (Multipole acceptance criterion)
+  use_tree_below_softening:    1
+  mesh_side_length:            256
   comoving_DM_softening:         0.003320 # Comoving softening for DM (3.32 ckpc)
   max_physical_DM_softening:     0.001300 # Physical softening for DM (1.30 pkpc)
   comoving_baryon_softening:     0.001790 # Comoving softening for baryons (1.79 ckpc)
   max_physical_baryon_softening: 0.000700 # Physical softening for baryons (0.70 pkpc)
-  dithering:              0
 
 # Parameters for the hydrodynamics scheme
 SPH:
@@ -62,7 +64,7 @@ Scheduler:
 
 Restarts:
   onexit:       1
-  delta_hours:  2.0
+  delta_hours:  6.0
   
 # Parameters related to the initial conditions
 InitialConditions:
@@ -72,6 +74,15 @@ InitialConditions:
   cleanup_velocity_factors: 1               # Remove the sqrt(a) factor in the velocities inherited from Gadget
   generate_gas_in_ics: 1                    # Generate gas particles from the DM-only ICs
   cleanup_smoothing_lengths: 1              # Since we generate gas, make use of the (expensive) cleaning-up procedure.
+
+# Parameters of the line-of-sight outputs
+LineOfSight:
+  basename:            los
+  num_along_x:         0
+  num_along_y:         0
+  num_along_z:         100
+  scale_factor_first:  0.1
+  delta_time:          1.1
 
 # Quick Lyman-alpha cooling (EAGLE with fixed primoridal Z)
 QLACooling:

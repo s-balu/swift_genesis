@@ -81,6 +81,8 @@ const char *taskID_names[task_type_count] = {"none",
                                              "grav_mesh",
                                              "grav_end_force",
                                              "cooling",
+                                             "cooling_in",
+                                             "cooling_out",
                                              "star_formation",
                                              "star_formation_in",
                                              "star_formation_out",
@@ -443,7 +445,6 @@ void task_unlock(struct task *t) {
       break;
 
     case task_type_drift_gpart:
-    case task_type_grav_mesh:
     case task_type_end_grav_force:
       cell_gunlocktree(ci);
       break;
@@ -456,8 +457,10 @@ void task_unlock(struct task *t) {
     case task_type_self:
     case task_type_sub_self:
       if (subtype == task_subtype_grav) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
         cell_gunlocktree(ci);
         cell_munlocktree(ci);
+#endif
       } else if ((subtype == task_subtype_stars_density) ||
                  (subtype == task_subtype_stars_feedback)) {
         cell_sunlocktree(ci);
@@ -470,7 +473,11 @@ void task_unlock(struct task *t) {
         cell_unlocktree(ci);
       } else if (subtype == task_subtype_do_bh_swallow) {
         cell_bunlocktree(ci);
-      } else {
+      } else if (subtype == task_subtype_limiter) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+        cell_unlocktree(ci);
+#endif
+      } else { /* hydro */
         cell_unlocktree(ci);
       }
       break;
@@ -478,10 +485,12 @@ void task_unlock(struct task *t) {
     case task_type_pair:
     case task_type_sub_pair:
       if (subtype == task_subtype_grav) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
         cell_gunlocktree(ci);
         cell_gunlocktree(cj);
         cell_munlocktree(ci);
         cell_munlocktree(cj);
+#endif
       } else if ((subtype == task_subtype_stars_density) ||
                  (subtype == task_subtype_stars_feedback)) {
         cell_sunlocktree(ci);
@@ -499,24 +508,41 @@ void task_unlock(struct task *t) {
       } else if (subtype == task_subtype_do_bh_swallow) {
         cell_bunlocktree(ci);
         cell_bunlocktree(cj);
-      } else {
+      } else if (subtype == task_subtype_limiter) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+        cell_unlocktree(ci);
+        cell_unlocktree(cj);
+#endif
+      } else { /* hydro */
         cell_unlocktree(ci);
         cell_unlocktree(cj);
       }
       break;
 
     case task_type_grav_down:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       cell_gunlocktree(ci);
       cell_munlocktree(ci);
+#endif
       break;
 
     case task_type_grav_long_range:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       cell_munlocktree(ci);
+#endif
       break;
 
     case task_type_grav_mm:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       cell_munlocktree(ci);
       cell_munlocktree(cj);
+#endif
+      break;
+
+    case task_type_grav_mesh:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+      cell_gunlocktree(ci);
+#endif
       break;
 
     case task_type_star_formation:
@@ -604,7 +630,6 @@ int task_lock(struct task *t) {
 
     case task_type_drift_gpart:
     case task_type_end_grav_force:
-    case task_type_grav_mesh:
       if (ci->grav.phold) return 0;
       if (cell_glocktree(ci) != 0) return 0;
       break;
@@ -612,6 +637,7 @@ int task_lock(struct task *t) {
     case task_type_self:
     case task_type_sub_self:
       if (subtype == task_subtype_grav) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
         /* Lock the gparts and the m-pole */
         if (ci->grav.phold || ci->grav.mhold) return 0;
         if (cell_glocktree(ci) != 0)
@@ -620,6 +646,7 @@ int task_lock(struct task *t) {
           cell_gunlocktree(ci);
           return 0;
         }
+#endif
       } else if ((subtype == task_subtype_stars_density) ||
                  (subtype == task_subtype_stars_feedback)) {
         if (ci->stars.hold) return 0;
@@ -643,6 +670,11 @@ int task_lock(struct task *t) {
       } else if (subtype == task_subtype_do_bh_swallow) {
         if (ci->black_holes.hold) return 0;
         if (cell_blocktree(ci) != 0) return 0;
+      } else if (subtype == task_subtype_limiter) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+        if (ci->hydro.hold) return 0;
+        if (cell_locktree(ci) != 0) return 0;
+#endif
       } else { /* subtype == hydro */
         if (ci->hydro.hold) return 0;
         if (cell_locktree(ci) != 0) return 0;
@@ -652,6 +684,7 @@ int task_lock(struct task *t) {
     case task_type_pair:
     case task_type_sub_pair:
       if (subtype == task_subtype_grav) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
         /* Lock the gparts and the m-pole in both cells */
         if (ci->grav.phold || cj->grav.phold) return 0;
         if (cell_glocktree(ci) != 0) return 0;
@@ -668,6 +701,7 @@ int task_lock(struct task *t) {
           cell_munlocktree(ci);
           return 0;
         }
+#endif
       } else if ((subtype == task_subtype_stars_density) ||
                  (subtype == task_subtype_stars_feedback)) {
         /* Lock the stars and the gas particles in both cells */
@@ -719,6 +753,15 @@ int task_lock(struct task *t) {
           cell_bunlocktree(ci);
           return 0;
         }
+      } else if (subtype == task_subtype_limiter) {
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+        if (ci->hydro.hold || cj->hydro.hold) return 0;
+        if (cell_locktree(ci) != 0) return 0;
+        if (cell_locktree(cj) != 0) {
+          cell_unlocktree(ci);
+          return 0;
+        }
+#endif
       } else { /* subtype == hydro */
         /* Lock the parts in both cells */
         if (ci->hydro.hold || cj->hydro.hold) return 0;
@@ -731,6 +774,7 @@ int task_lock(struct task *t) {
       break;
 
     case task_type_grav_down:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       /* Lock the gparts and the m-poles */
       if (ci->grav.phold || ci->grav.mhold) return 0;
       if (cell_glocktree(ci) != 0)
@@ -739,15 +783,19 @@ int task_lock(struct task *t) {
         cell_gunlocktree(ci);
         return 0;
       }
+#endif
       break;
 
     case task_type_grav_long_range:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       /* Lock the m-poles */
       if (ci->grav.mhold) return 0;
       if (cell_mlocktree(ci) != 0) return 0;
+#endif
       break;
 
     case task_type_grav_mm:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
       /* Lock both m-poles */
       if (ci->grav.mhold || cj->grav.mhold) return 0;
       if (cell_mlocktree(ci) != 0) return 0;
@@ -755,6 +803,15 @@ int task_lock(struct task *t) {
         cell_munlocktree(ci);
         return 0;
       }
+#endif
+      break;
+
+    case task_type_grav_mesh:
+#ifdef SWIFT_TASKS_WITHOUT_ATOMICS
+      /* Lock the gparts */
+      if (ci->grav.phold) return 0;
+      if (cell_glocktree(ci) != 0) return 0;
+#endif
       break;
 
     case task_type_star_formation:
@@ -1040,12 +1097,14 @@ void task_dump_all(struct engine *e, int step) {
  *
  * @param dumpfile name of the file for the output.
  * @param e the #engine
+ * @param dump_tasks_threshold Fraction of the step time above whic any task
+ * triggers a call to task_dump_all().
  * @param header whether to write a header include file.
  * @param allranks do the statistics over all ranks, if not just the current
  *                 one, only used if header is false.
  */
-void task_dump_stats(const char *dumpfile, struct engine *e, int header,
-                     int allranks) {
+void task_dump_stats(const char *dumpfile, struct engine *e,
+                     float dump_tasks_threshold, int header, int allranks) {
 
   const ticks function_tic = getticks();
 
@@ -1070,7 +1129,9 @@ void task_dump_stats(const char *dumpfile, struct engine *e, int header,
     }
   }
 
+  double stepdt = (double)e->toc_step - (double)e->tic_step;
   double total[1] = {0.0};
+  int dumped_plot_data = 0;
   for (int l = 0; l < e->sched.nr_tasks; l++) {
     int type = e->sched.tasks[l].type;
 
@@ -1097,6 +1158,23 @@ void task_dump_stats(const char *dumpfile, struct engine *e, int header,
         tmax[type][subtype] = tic;
       }
       total[0] += dt;
+
+      /* Check if this is a problematic task and make a report. */
+      if (dump_tasks_threshold > 0. && dt / stepdt > dump_tasks_threshold) {
+
+        if (e->verbose)
+          message(
+              "Long running task detected: %s/%s using %.1f%% of step runtime",
+              taskID_names[type], subtaskID_names[subtype],
+              dt / stepdt * 100.0);
+
+        if (!dumped_plot_data) {
+#ifdef SWIFT_DEBUG_TASKS
+          task_dump_all(e, e->step + 1);
+#endif
+          dumped_plot_data = 1;
+        }
+      }
     }
   }
 
@@ -1317,6 +1395,10 @@ enum task_categories task_get_category(const struct task *t) {
     case task_type_grav_mesh:
     case task_type_end_grav_force:
       return task_category_gravity;
+
+    case task_type_fof_self:
+    case task_type_fof_pair:
+      return task_category_fof;
 
     case task_type_self:
     case task_type_pair:

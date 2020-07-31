@@ -53,6 +53,7 @@ AM_CONFIG_HEADER(config.h)
 AX_CHECK_ENABLE_DEBUG
 AC_PROG_CC
 AM_PROG_CC_C_O
+AC_OPENMP
 
 # If debug is selected then we also define SWIFT_DEVELOP_MODE to control
 # any developer code options.
@@ -238,6 +239,23 @@ if test "x$enable_debug" = "xyes"; then
       CFLAGS="$CFLAGS -debug inline-debug-info"
    fi
 fi
+
+# Are we using the regular tasks (with atomics and no task conflicts) or
+# are we using the atomic-free task-conflicting (slower) version?
+AC_ARG_ENABLE([atomics-within-tasks],
+   [AS_HELP_STRING([--disable-atomics-within-tasks],
+     [Disable the use of atomic operations within tasks. This creates more task conflicts
+      but allows for atomic-free and lock-free code within the tasks. This likely slows down
+      the code @<:@yes/no@:>@]
+   )],
+   [enable_atomics_within_tasks="$enableval"],
+   [enable_atomics_within_tasks="yes"]
+)
+AS_IF([test "x$enable_atomics_within_tasks" != "xno"],
+   , # Note: atomics are allowed by default, we define the macro if we don't want them.
+   [AC_DEFINE([SWIFT_TASKS_WITHOUT_ATOMICS],1,[Makes SWIFT use atomic-free and lock-free tasks.])
+])
+
 
 # Check if task debugging is on.
 AC_ARG_ENABLE([task-debugging],
@@ -1457,6 +1475,17 @@ if test "$ax_cv_c_compiler_vendor" = "clang"; then
       AC_CHECK_LIB([m],[__exp10f], [AC_DEFINE([HAVE___EXP10F],1,[The __exp10f function is present.])])
 fi
 
+# Check if we have native sincos and sincosf functions. If not failback to our
+# implementations. On Apple/CLANG we have __sincos, so also check for that
+# if the compiler is clang.
+AC_CHECK_LIB([m],[sincos], [AC_DEFINE([HAVE_SINCOS],1,[The sincos function is present.])])
+AC_CHECK_LIB([m],[sincosf], [AC_DEFINE([HAVE_SINCOSF],1,[The sincosf function is present.])])
+if test "$ax_cv_c_compiler_vendor" = "clang"; then
+      AC_CHECK_LIB([m],[__sincos], [AC_DEFINE([HAVE___SINCOS],1,[The __sincos function is present.])])
+      AC_CHECK_LIB([m],[__sincosf], [AC_DEFINE([HAVE___SINCOSF],1,[The __sincosf function is present.])])
+fi
+
+
 # Add warning flags by default, if these can be used. Option =error adds
 # -Werror to GCC, clang and Intel.  Note do this last as compiler tests may
 # become errors, if that's an issue don't use CFLAGS for these, use an AC_SUBST().
@@ -1551,6 +1580,7 @@ with_subgrid_stars=none
 with_subgrid_star_formation=none
 with_subgrid_feedback=none
 with_subgrid_task_order=default
+with_subgrid_sink=none
 
 case "$with_subgrid" in
    yes)
@@ -1566,8 +1596,8 @@ case "$with_subgrid" in
 	with_subgrid_star_formation=GEAR
 	with_subgrid_feedback=GEAR
 	with_subgrid_black_holes=none
-  # GEAR's order is not used anymore
-	with_subgrid_task_order=default
+	with_subgrid_task_order=GEAR
+  	with_subgrid_sink=none
 	enable_fof=no
    ;;
    QLA)
@@ -1580,6 +1610,7 @@ case "$with_subgrid" in
 	with_subgrid_feedback=none
 	with_subgrid_black_holes=none
 	with_subgrid_task_order=default
+  	with_subgrid_sink=none
 	enable_fof=no
    ;;
    EAGLE)
@@ -1592,6 +1623,20 @@ case "$with_subgrid" in
 	with_subgrid_feedback=EAGLE
 	with_subgrid_black_holes=EAGLE
 	with_subgrid_task_order=EAGLE
+  	with_subgrid_sink=none
+	enable_fof=yes
+   ;;
+   EAGLE-XL)
+	with_subgrid_cooling=COLIBRE
+	with_subgrid_chemistry=EAGLE
+	with_subgrid_tracers=EAGLE
+	with_subgrid_entropy_floor=EAGLE
+	with_subgrid_stars=EAGLE
+	with_subgrid_star_formation=EAGLE
+	with_subgrid_feedback=EAGLE
+	with_subgrid_black_holes=EAGLE
+	with_subgrid_task_order=EAGLE
+	with_subgrid_sink=none
 	enable_fof=yes
    ;;
    *)
@@ -1920,6 +1965,9 @@ case "$with_cooling" in
    EAGLE)
       AC_DEFINE([COOLING_EAGLE], [1], [Cooling following the EAGLE model])
    ;;
+   COLIBRE)
+      AC_DEFINE([COOLING_COLIBRE], [1], [Cooling following the COLIBRE model])
+   ;;
    *)
       AC_MSG_ERROR([Unknown cooling function: $with_cooling])
    ;;
@@ -2097,36 +2145,62 @@ case "$with_black_holes" in
    ;;
 esac
 
-# Task order
-AC_ARG_WITH([task-order],
-[AS_HELP_STRING([--with-task-order=<model>],
-[Task order to use @<:@default, EAGLE, GEAR default: default@:>@]
-)],
-[with_task_order="$withval"],
-[with_task_order="default"]
+# Sink model.
+AC_ARG_WITH([sink],
+   [AS_HELP_STRING([--with-sink=<model>],
+      [Sink particle model to use @<:@none, default: none@:>@]
+   )],
+   [with_sink="$withval"],
+   [with_sink="none"]
 )
 
 if test "$with_subgrid" != "none"; then
-if test "$with_task_order" != "default"; then
-AC_MSG_ERROR([Cannot provide with-subgrid and with-task-order together])
-else
-with_task_order="$with_subgrid_task_order"
+   if test "$with_sink" != "none"; then
+      AC_MSG_ERROR([Cannot provide with-subgrid and with-sink together])
+   else
+      with_sink="$with_subgrid_sink"
+   fi
 fi
+
+case "$with_sink" in
+   none)
+      AC_DEFINE([SINK_NONE], [1], [No sink particle model])
+   ;;
+   *)
+      AC_MSG_ERROR([Unknown sink particle model model: $with_sink])
+   ;;
+esac
+
+# Task order
+AC_ARG_WITH([task-order],
+   [AS_HELP_STRING([--with-task-order=<model>],
+       [Task order to use @<:@default, EAGLE, GEAR default: default@:>@]
+   )],
+   [with_task_order="$withval"],
+   [with_task_order="default"]
+)
+
+if test "$with_subgrid" != "none"; then
+   if test "$with_task_order" != "default"; then
+      AC_MSG_ERROR([Cannot provide with-subgrid and with-task-order together])
+   else
+      with_task_order="$with_subgrid_task_order"
+   fi
 fi
 
 case "$with_task_order" in
-EAGLE)
-AC_DEFINE([TASK_ORDER_EAGLE], [1], [EAGLE task order])
-;;
-default)
-AC_DEFINE([TASK_ORDER_DEFAULT], [1], [Default (i.e. EAGLE/OWLS) task order])
-;;
-GEAR)
-AC_DEFINE([TASK_ORDER_GEAR], [1], [GEAR task order])
-;;
-*)
-AC_MSG_ERROR([Unknown task ordering: $with_task_order])
-;;
+   EAGLE)
+       AC_DEFINE([TASK_ORDER_EAGLE], [1], [EAGLE task order])
+   ;;
+   default)
+       AC_DEFINE([TASK_ORDER_DEFAULT], [1], [Default (i.e. EAGLE/OWLS) task order])
+   ;;
+   GEAR)
+       AC_DEFINE([TASK_ORDER_GEAR], [1], [GEAR task order])
+   ;;
+   *)
+       AC_MSG_ERROR([Unknown task ordering: $with_task_order])
+   ;;
 esac
 
 #  External potential
@@ -2152,6 +2226,9 @@ case "$with_potential" in
    ;;
    nfw)
       AC_DEFINE([EXTERNAL_POTENTIAL_NFW], [1], [Navarro-Frenk-White external potential])
+   ;;
+   nfw_mn)
+      AC_DEFINE([EXTERNAL_POTENTIAL_NFW_MN], [1], [Navarro-Frenk-White + Miyamoto-Nagai disk external potential])
    ;;
    disc-patch)
       AC_DEFINE([EXTERNAL_POTENTIAL_DISC_PATCH], [1], [Disc-patch external potential])
@@ -2303,6 +2380,9 @@ AM_CONDITIONAL([HAVEQLACOOLING], [test $with_cooling = "QLA"])
 # Check if using EAGLE cooling
 AM_CONDITIONAL([HAVEEAGLECOOLING], [test $with_cooling = "EAGLE"])
 
+# Check if using COLIBRE cooling
+AM_CONDITIONAL([HAVECOLIBRECOOLING], [test $with_cooling = "COLIBRE"])
+
 # Check if using EAGLE feedback
 AM_CONDITIONAL([HAVEEAGLEFEEDBACK], [test $with_feedback = "EAGLE"])
 
@@ -2354,7 +2434,7 @@ AC_MSG_RESULT([
    Compiler             : $CC
     - vendor            : $ax_cv_c_compiler_vendor
     - version           : $ax_cv_c_compiler_version
-    - flags             : $CFLAGS
+    - flags             : $CFLAGS $OPENMP_CFLAGS
    MPI enabled          : $enable_mpi
    HDF5 enabled         : $with_hdf5
     - parallel          : $have_parallel_hdf5
@@ -2390,9 +2470,11 @@ AC_MSG_RESULT([
    Stellar model        : $with_stars
    Star formation model : $with_star_formation
    Star feedback model  : $with_feedback
+   Sink particle model  : $with_sink
    Black holes model    : $with_black_holes
    Task dependencies    : $with_task_order
 
+   Atomic operations in tasks  : $enable_atomics_within_tasks
    Individual timers           : $enable_timers
    Task debugging              : $enable_task_debugging
    Threadpool debugging        : $enable_threadpool_debugging

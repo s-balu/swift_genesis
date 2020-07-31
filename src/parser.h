@@ -32,7 +32,7 @@
 
 /* Some constants. */
 #define PARSER_MAX_LINE_SIZE 256
-#define PARSER_MAX_NO_OF_PARAMS 512
+#define PARSER_MAX_NO_OF_PARAMS 600
 #define PARSER_MAX_NO_OF_SECTIONS 64
 
 /* A parameter in the input file */
@@ -116,5 +116,8 @@ void parser_write_params_to_hdf5(const struct swift_params *params, hid_t grp,
 /* Dump/restore. */
 void parser_struct_dump(const struct swift_params *params, FILE *stream);
 void parser_struct_restore(const struct swift_params *params, FILE *stream);
+
+/* Lookup functions */
+int parser_get_section_id(const struct swift_params *params, const char *name);
 
 #endif /* SWIFT_PARSER_H */

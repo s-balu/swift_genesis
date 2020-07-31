@@ -38,6 +38,7 @@
 #include "collectgroup.h"
 #include "dump.h"
 #include "mesh_gravity.h"
+#include "output_options.h"
 #include "parser.h"
 #include "partition.h"
 #include "potential.h"
@@ -79,9 +80,11 @@ enum engine_policy {
   engine_policy_timestep_limiter = (1 << 21),
   engine_policy_timestep_sync = (1 << 22),
   engine_policy_logger = (1 << 23),
-  engine_policy_produce_density_grids = (1 << 24)
+  engine_policy_line_of_sight = (1 << 24),
+  engine_policy_sink = (1 << 25),
+  engine_policy_produce_density_grids = (1 << 26)
 };
-#define engine_maxpolicy 25
+#define engine_maxpolicy 27
 extern const char *engine_policy_names[engine_maxpolicy + 1];
 
 /**
@@ -106,7 +109,7 @@ enum engine_step_properties {
 #define engine_maxproxies 64
 #define engine_tasksreweight 1
 #define engine_parts_size_grow 1.05
-#define engine_max_proxy_centre_frac 0.2
+#define engine_max_proxy_centre_frac 0.5
 #define engine_redistribute_alloc_margin 1.2
 #define engine_rebuild_link_alloc_margin 1.2
 #define engine_foreign_alloc_margin 1.05
@@ -114,12 +117,13 @@ enum engine_step_properties {
 #define engine_default_timesteps_file_name "timesteps"
 #define engine_max_parts_per_ghost_default 1000
 #define engine_max_sparts_per_ghost_default 1000
+#define engine_max_parts_per_cooling_default 10000
 #define engine_star_resort_task_depth_default 2
 #define engine_tasks_per_cell_margin 1.2
 #define engine_default_stf_subdir_per_output ""
 #define engine_default_stf_subdir ""
 #define engine_default_snapshot_subdir ""
-#define engine_default_density_grids_subdir_per_output ""
+#define engine_default_density_grids_subdir ""
 
 /**
  * @brief The rank of the engine as a global variable (for messages).
@@ -275,6 +279,10 @@ struct engine {
   long long count_inhibited_bparts;
 #endif
 
+  /* Maximal ID of the parts (used for the generation of new IDs when splitting)
+   */
+  long long max_parts_id;
+
   /* Total mass in the simulation */
   double total_mass;
 
@@ -297,6 +305,7 @@ struct engine {
 
   char snapshot_base_name[PARSER_MAX_LINE_SIZE];
   char snapshot_subdir[PARSER_MAX_LINE_SIZE];
+  int snapshot_distributed;
   int snapshot_compression;
   int snapshot_int_time_label_on;
   int snapshot_invoke_stf;
@@ -495,6 +504,9 @@ struct engine {
   /* The (parsed) parameter file */
   struct swift_params *parameter_file;
 
+  /* The output selection options */
+  struct output_options *output_options;
+
   /* Temporary struct to hold a group of deferable properties (in MPI mode
    * these are reduced together, but may not be required just yet). */
   struct collectgroup1 collect_group1;
@@ -529,6 +541,20 @@ struct engine {
   /* Has there been an stf this timestep? */
   char stf_this_timestep;
 
+  /* Line of sight properties. */
+  struct los_props *los_properties;
+
+  /* Line of sight outputs information. */
+  struct output_list *output_list_los;
+  double a_first_los;
+  double time_first_los;
+  double delta_time_los;
+  integertime_t ti_next_los;
+  int los_output_count;
+
+  /* Total number of sink particles in the system. */
+  long long total_nr_sinks;
+
   /* Has there been an density field output this timestep? */
   char density_field_this_timestep;
 
@@ -556,6 +582,7 @@ void engine_compute_next_stf_time_extra_outputs(struct engine *e);
 void engine_compute_next_density_grids_time(struct engine *e);
 void engine_compute_next_fof_time(struct engine *e);
 void engine_compute_next_statistics_time(struct engine *e);
+void engine_compute_next_los_time(struct engine *e);
 void engine_recompute_displacement_constraint(struct engine *e);
 void engine_unskip(struct engine *e);
 void engine_unskip_timestep_communications(struct engine *e);
@@ -572,7 +599,8 @@ void engine_dump_density_grids(struct engine *e);
 void engine_dump_stf_density_grids(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params);
 void engine_init(struct engine *e, struct space *s, struct swift_params *params,
-                 long long Ngas, long long Ngparts, long long Nstars,
+                 struct output_options *output_options, long long Ngas,
+                 long long Ngparts, long long Nsinks, long long Nstars,
                  long long Nblackholes, long long Nbackground_gparts,
                  int policy, int verbose, struct repartition *reparttype,
                  const struct unit_system *internal_units,
@@ -586,7 +614,8 @@ void engine_init(struct engine *e, struct space *s, struct swift_params *params,
                  struct cooling_function_data *cooling_func,
                  const struct star_formation *starform,
                  const struct chemistry_global_data *chemistry,
-                 struct fof_props *fof_properties);
+                 struct fof_props *fof_properties,
+                 struct los_props *los_properties);
 void engine_config(int restart, int fof, struct engine *e,
                    struct swift_params *params, int nr_nodes, int nodeID,
                    int nr_threads, int with_aff, int verbose,
@@ -614,7 +643,7 @@ void engine_print_policy(struct engine *e);
 int engine_is_done(struct engine *e);
 void engine_pin(void);
 void engine_unpin(void);
-void engine_clean(struct engine *e, const int fof);
+void engine_clean(struct engine *e, const int fof, const int restart);
 int engine_estimate_nr_tasks(const struct engine *e);
 void engine_print_task_counts(const struct engine *e);
 void engine_fof(struct engine *e, const int dump_results,

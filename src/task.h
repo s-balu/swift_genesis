@@ -75,6 +75,8 @@ enum task_types {
   task_type_grav_mesh,
   task_type_end_grav_force,
   task_type_cooling,
+  task_type_cooling_in,  /* Implicit */
+  task_type_cooling_out, /* Implicit */
   task_type_star_formation,
   task_type_star_formation_in,  /* Implicit */
   task_type_star_formation_out, /* Implicit */
@@ -265,8 +267,8 @@ int task_lock(struct task *t);
 void task_do_rewait(struct task *t);
 void task_print(const struct task *t);
 void task_dump_all(struct engine *e, int step);
-void task_dump_stats(const char *dumpfile, struct engine *e, int header,
-                     int allranks);
+void task_dump_stats(const char *dumpfile, struct engine *e,
+                     float dump_tasks_threshold, int header, int allranks);
 void task_dump_active(struct engine *e);
 void task_get_full_name(int type, int subtype, char *name);
 void task_get_group_name(int type, int subtype, char *cluster);

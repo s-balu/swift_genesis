@@ -39,8 +39,10 @@ Statistics:
 
 # Parameters for the self-gravity scheme
 Gravity:
-  eta:                    0.05    # Constant dimensionless multiplier for time integration.
-  theta:                  0.7     # Opening angle (Multipole acceptance criterion)
+  eta:                       0.05    # Constant dimensionless multiplier for time integration.
+  MAC:                       geometric
+  theta_cr:                  0.7     
+  use_tree_below_softening:  1
   comoving_DM_softening:     0.08 # Comoving softening length (in internal units).
   max_physical_DM_softening: 0.08    # Physical softening length (in internal units).
   comoving_baryon_softening:     0.08 # Comoving softening length (in internal units).
@@ -85,6 +87,8 @@ GrackleCooling:
 GEARStarFormation:
   star_formation_efficiency: 0.01   # star formation efficiency (c_*)
   maximal_temperature:  1e10         # Upper limit to the temperature of a star forming particle
+  n_stars_per_particle: 4
+  min_mass_frac: 0.5
 
 GEARPressureFloor:
   jeans_factor: 10

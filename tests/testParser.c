@@ -143,6 +143,18 @@ int main(int argc, char *argv[]) {
   assert(strcmp("abcdefghijklmnopqrstuvwxyz", alphabet) == 0);
   parser_free_param_string_array(nvar_result, var_result);
 
+  /* Unfinished list of values. Should read last improperly quoted string.
+   * Note length should be CHUNK + 1. */
+  parser_get_param_string_array(&param_file, "Words:unfinished", &nvar_result,
+                                &var_result);
+  assert(nvar_result == 11);
+  printf("\nList from Words:unfinished parameter (%d)\n", nvar_result);
+  for (int i = 0; i < nvar_result; i++) {
+    printf("   %d: %s\n", i, var_result[i]);
+  }
+  assert(strcmp("abcdefg", var_result[nvar_result - 1]) == 0);
+  parser_free_param_string_array(nvar_result, var_result);
+
   /* Print the contents of the structure to stdout now used. */
   printf("\n--- Values after being used:\n");
   parser_print_params(&param_file);
@@ -195,6 +207,15 @@ int main(int argc, char *argv[]) {
 
   assert(haveoptwords1 == 0);
   assert(haveoptwords2 == 1);
+
+  /* Issue 681, parser_get_opt_param_string returns same value. */
+  char run_name_1[80];
+  char run_name_2[80];
+  parser_get_opt_param_string(&param_file, "MetaData:run_name", run_name_1,
+                              "Untitled SWIFT simulation");
+  parser_get_opt_param_string(&param_file, "MetaData:run_name", run_name_2,
+                              "Untitled SWIFT simulation");
+  assert(strcmp(run_name_1, run_name_2) == 0);
 
   return 0;
 }

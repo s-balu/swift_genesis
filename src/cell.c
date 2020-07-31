@@ -61,6 +61,7 @@
 #include "hydro_properties.h"
 #include "memswap.h"
 #include "minmax.h"
+#include "multipole.h"
 #include "pressure_floor.h"
 #include "scheduler.h"
 #include "space.h"
@@ -233,6 +234,7 @@ int cell_link_gparts(struct cell *c, struct gpart *gparts) {
 #endif
 
   c->grav.parts = gparts;
+  c->grav.parts_rebuild = gparts;
 
   /* Fill the progeny recursively, depth-first. */
   if (c->split) {
@@ -389,6 +391,9 @@ int cell_link_foreign_gparts(struct cell *c, struct gpart *gparts) {
       error("Something is wrong with the foreign counts");
 #endif
     return counts;
+  } else {
+    c->grav.parts = gparts;
+    c->grav.parts_rebuild = gparts;
   }
 
   /* Go deeper to find the level where the tasks are */
@@ -1154,7 +1159,12 @@ int cell_pack_sf_counts(struct cell *restrict c,
   pcells[0].stars.count = c->stars.count;
   pcells[0].stars.dx_max_part = c->stars.dx_max_part;
 
+  /* Pack this cell's data. */
+  pcells[0].grav.delta_from_rebuild = c->grav.parts - c->grav.parts_rebuild;
+  pcells[0].grav.count = c->grav.count;
+
 #ifdef SWIFT_DEBUG_CHECKS
+  /* Stars */
   if (c->stars.parts_rebuild == NULL)
     error("Star particles array at rebuild is NULL! c->depth=%d", c->depth);
 
@@ -1162,6 +1172,16 @@ int cell_pack_sf_counts(struct cell *restrict c,
     error("Stars part pointer moved in the wrong direction!");
 
   if (pcells[0].stars.delta_from_rebuild > 0 && c->depth == 0)
+    error("Shifting the top-level pointer is not allowed!");
+
+  /* Grav */
+  if (c->grav.parts_rebuild == NULL)
+    error("Grav. particles array at rebuild is NULL! c->depth=%d", c->depth);
+
+  if (pcells[0].grav.delta_from_rebuild < 0)
+    error("Grav part pointer moved in the wrong direction!");
+
+  if (pcells[0].grav.delta_from_rebuild > 0 && c->depth == 0)
     error("Shifting the top-level pointer is not allowed!");
 #endif
 
@@ -1198,12 +1218,17 @@ int cell_unpack_sf_counts(struct cell *restrict c,
 #ifdef SWIFT_DEBUG_CHECKS
   if (c->stars.parts_rebuild == NULL)
     error("Star particles array at rebuild is NULL!");
+  if (c->grav.parts_rebuild == NULL)
+    error("Grav particles array at rebuild is NULL!");
 #endif
 
   /* Unpack this cell's data. */
   c->stars.count = pcells[0].stars.count;
   c->stars.parts = c->stars.parts_rebuild + pcells[0].stars.delta_from_rebuild;
   c->stars.dx_max_part = pcells[0].stars.dx_max_part;
+
+  c->grav.count = pcells[0].grav.count;
+  c->grav.parts = c->grav.parts_rebuild + pcells[0].grav.delta_from_rebuild;
 
   /* Fill in the progeny, depth-first recursion. */
   int count = 1;
@@ -1228,7 +1253,7 @@ int cell_unpack_sf_counts(struct cell *restrict c,
  * @return 0 on success, 1 on failure
  */
 int cell_locktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to lock this cell. */
   if (c->hydro.hold || lock_trylock(&c->hydro.lock) != 0) {
@@ -1288,7 +1313,7 @@ int cell_locktree(struct cell *c) {
  * @return 0 on success, 1 on failure
  */
 int cell_glocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to lock this cell. */
   if (c->grav.phold || lock_trylock(&c->grav.plock) != 0) {
@@ -1348,7 +1373,7 @@ int cell_glocktree(struct cell *c) {
  * @return 0 on success, 1 on failure
  */
 int cell_mlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to lock this cell. */
   if (c->grav.mhold || lock_trylock(&c->grav.mlock) != 0) {
@@ -1408,7 +1433,7 @@ int cell_mlocktree(struct cell *c) {
  * @return 0 on success, 1 on failure
  */
 int cell_slocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to lock this cell. */
   if (c->stars.hold || lock_trylock(&c->stars.lock) != 0) {
@@ -1462,13 +1487,73 @@ int cell_slocktree(struct cell *c) {
 }
 
 /**
+ * @brief Lock a cell for access to its array of #sink and hold its parents.
+ *
+ * @param c The #cell.
+ * @return 0 on success, 1 on failure
+ */
+int cell_sink_locktree(struct cell *c) {
+  TIMER_TIC;
+
+  /* First of all, try to lock this cell. */
+  if (c->sinks.hold || lock_trylock(&c->sinks.lock) != 0) {
+    TIMER_TOC(timer_locktree);
+    return 1;
+  }
+
+  /* Did somebody hold this cell in the meantime? */
+  if (c->sinks.hold) {
+    /* Unlock this cell. */
+    if (lock_unlock(&c->sinks.lock) != 0) error("Failed to unlock cell.");
+
+    /* Admit defeat. */
+    TIMER_TOC(timer_locktree);
+    return 1;
+  }
+
+  /* Climb up the tree and lock/hold/unlock. */
+  struct cell *finger;
+  for (finger = c->parent; finger != NULL; finger = finger->parent) {
+    /* Lock this cell. */
+    if (lock_trylock(&finger->sinks.lock) != 0) break;
+
+    /* Increment the hold. */
+    atomic_inc(&finger->sinks.hold);
+
+    /* Unlock the cell. */
+    if (lock_unlock(&finger->sinks.lock) != 0) error("Failed to unlock cell.");
+  }
+
+  /* If we reached the top of the tree, we're done. */
+  if (finger == NULL) {
+    TIMER_TOC(timer_locktree);
+    return 0;
+  }
+
+  /* Otherwise, we hit a snag. */
+  else {
+    /* Undo the holds up to finger. */
+    for (struct cell *finger2 = c->parent; finger2 != finger;
+         finger2 = finger2->parent)
+      atomic_dec(&finger2->sinks.hold);
+
+    /* Unlock this cell. */
+    if (lock_unlock(&c->sinks.lock) != 0) error("Failed to unlock cell.");
+
+    /* Admit defeat. */
+    TIMER_TOC(timer_locktree);
+    return 1;
+  }
+}
+
+/**
  * @brief Lock a cell for access to its array of #bpart and hold its parents.
  *
  * @param c The #cell.
  * @return 0 on success, 1 on failure
  */
 int cell_blocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to lock this cell. */
   if (c->black_holes.hold || lock_trylock(&c->black_holes.lock) != 0) {
@@ -1528,7 +1613,7 @@ int cell_blocktree(struct cell *c) {
  * @param c The #cell.
  */
 void cell_unlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to unlock this cell. */
   if (lock_unlock(&c->hydro.lock) != 0) error("Failed to unlock cell.");
@@ -1546,7 +1631,7 @@ void cell_unlocktree(struct cell *c) {
  * @param c The #cell.
  */
 void cell_gunlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to unlock this cell. */
   if (lock_unlock(&c->grav.plock) != 0) error("Failed to unlock cell.");
@@ -1564,7 +1649,7 @@ void cell_gunlocktree(struct cell *c) {
  * @param c The #cell.
  */
 void cell_munlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to unlock this cell. */
   if (lock_unlock(&c->grav.mlock) != 0) error("Failed to unlock cell.");
@@ -1582,7 +1667,7 @@ void cell_munlocktree(struct cell *c) {
  * @param c The #cell.
  */
 void cell_sunlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to unlock this cell. */
   if (lock_unlock(&c->stars.lock) != 0) error("Failed to unlock cell.");
@@ -1595,12 +1680,30 @@ void cell_sunlocktree(struct cell *c) {
 }
 
 /**
+ * @brief Unlock a cell's parents for access to #sink array.
+ *
+ * @param c The #cell.
+ */
+void cell_sink_unlocktree(struct cell *c) {
+  TIMER_TIC;
+
+  /* First of all, try to unlock this cell. */
+  if (lock_unlock(&c->sinks.lock) != 0) error("Failed to unlock cell.");
+
+  /* Climb up the tree and unhold the parents. */
+  for (struct cell *finger = c->parent; finger != NULL; finger = finger->parent)
+    atomic_dec(&finger->sinks.hold);
+
+  TIMER_TOC(timer_locktree);
+}
+
+/**
  * @brief Unlock a cell's parents for access to #bpart array.
  *
  * @param c The #cell.
  */
 void cell_bunlocktree(struct cell *c) {
-  TIMER_TIC
+  TIMER_TIC;
 
   /* First of all, try to unlock this cell. */
   if (lock_unlock(&c->black_holes.lock) != 0) error("Failed to unlock cell.");
@@ -1623,6 +1726,8 @@ void cell_bunlocktree(struct cell *c) {
  * @param bparts_offset Offset of the cell bparts array relative to the
  *        space's bparts array, i.e. c->black_holes.parts -
  * s->black_holes.parts.
+ * @param sinks_offset Offset of the cell sink array relative to the
+ *        space's sink array, i.e. c->sinks.parts - s->sinks.parts.
  * @param buff A buffer with at least max(c->hydro.count, c->grav.count)
  * entries, used for sorting indices.
  * @param sbuff A buffer with at least max(c->stars.count, c->grav.count)
@@ -1631,18 +1736,23 @@ void cell_bunlocktree(struct cell *c) {
  * entries, used for sorting indices for the sparts.
  * @param gbuff A buffer with at least max(c->hydro.count, c->grav.count)
  * entries, used for sorting indices for the gparts.
+ * @param sinkbuff A buffer with at least max(c->sinks.count, c->grav.count)
+ * entries, used for sorting indices for the sinks.
  */
 void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
-                ptrdiff_t bparts_offset, struct cell_buff *buff,
-                struct cell_buff *sbuff, struct cell_buff *bbuff,
-                struct cell_buff *gbuff) {
+                ptrdiff_t bparts_offset, ptrdiff_t sinks_offset,
+                struct cell_buff *buff, struct cell_buff *sbuff,
+                struct cell_buff *bbuff, struct cell_buff *gbuff,
+                struct cell_buff *sinkbuff) {
   const int count = c->hydro.count, gcount = c->grav.count,
-            scount = c->stars.count, bcount = c->black_holes.count;
+            scount = c->stars.count, bcount = c->black_holes.count,
+            sink_count = c->sinks.count;
   struct part *parts = c->hydro.parts;
   struct xpart *xparts = c->hydro.xparts;
   struct gpart *gparts = c->grav.parts;
   struct spart *sparts = c->stars.parts;
   struct bpart *bparts = c->black_holes.parts;
+  struct sink *sinks = c->sinks.parts;
   const double pivot[3] = {c->loc[0] + c->width[0] / 2,
                            c->loc[1] + c->width[1] / 2,
                            c->loc[2] + c->width[2] / 2};
@@ -1670,6 +1780,11 @@ void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
     if (bbuff[k].x[0] != bparts[k].x[0] || bbuff[k].x[1] != bparts[k].x[1] ||
         bbuff[k].x[2] != bparts[k].x[2])
       error("Inconsistent bbuff contents.");
+  }
+  for (int k = 0; k < sink_count; k++) {
+    if (sinkbuff[k].x[0] != sinks[k].x[0] ||
+        sinkbuff[k].x[1] != sinks[k].x[1] || sinkbuff[k].x[2] != sinks[k].x[2])
+      error("Inconsistent sinkbuff contents.");
   }
 #endif /* SWIFT_DEBUG_CHECKS */
 
@@ -1900,6 +2015,60 @@ void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
     c->progeny[k]->black_holes.parts = &c->black_holes.parts[bucket_offset[k]];
   }
 
+  /* Now do the same song and dance for the sinks. */
+  for (int k = 0; k < 8; k++) bucket_count[k] = 0;
+
+  /* Fill the buffer with the indices. */
+  for (int k = 0; k < sink_count; k++) {
+    const int bid = (sinkbuff[k].x[0] > pivot[0]) * 4 +
+                    (sinkbuff[k].x[1] > pivot[1]) * 2 +
+                    (sinkbuff[k].x[2] > pivot[2]);
+    bucket_count[bid]++;
+    sinkbuff[k].ind = bid;
+  }
+
+  /* Set the buffer offsets. */
+  bucket_offset[0] = 0;
+  for (int k = 1; k <= 8; k++) {
+    bucket_offset[k] = bucket_offset[k - 1] + bucket_count[k - 1];
+    bucket_count[k - 1] = 0;
+  }
+
+  /* Run through the buckets, and swap particles to their correct spot. */
+  for (int bucket = 0; bucket < 8; bucket++) {
+    for (int k = bucket_offset[bucket] + bucket_count[bucket];
+         k < bucket_offset[bucket + 1]; k++) {
+      int bid = sinkbuff[k].ind;
+      if (bid != bucket) {
+        struct sink sink = sinks[k];
+        struct cell_buff temp_buff = sinkbuff[k];
+        while (bid != bucket) {
+          int j = bucket_offset[bid] + bucket_count[bid]++;
+          while (sinkbuff[j].ind == bid) {
+            j++;
+            bucket_count[bid]++;
+          }
+          memswap(&sinks[j], &sink, sizeof(struct sink));
+          memswap(&sinkbuff[j], &temp_buff, sizeof(struct cell_buff));
+          if (sinks[j].gpart)
+            sinks[j].gpart->id_or_neg_offset = -(j + sinks_offset);
+          bid = temp_buff.ind;
+        }
+        sinks[k] = sink;
+        sinkbuff[k] = temp_buff;
+        if (sinks[k].gpart)
+          sinks[k].gpart->id_or_neg_offset = -(k + sinks_offset);
+      }
+      bucket_count[bid]++;
+    }
+  }
+
+  /* Store the counts and offsets. */
+  for (int k = 0; k < 8; k++) {
+    c->progeny[k]->sinks.count = bucket_count[k];
+    c->progeny[k]->sinks.parts = &c->sinks.parts[bucket_offset[k]];
+  }
+
   /* Finally, do the same song and dance for the gparts. */
   for (int k = 0; k < 8; k++) bucket_count[k] = 0;
 
@@ -1940,6 +2109,9 @@ void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
           } else if (gparts[j].type == swift_type_stars) {
             sparts[-gparts[j].id_or_neg_offset - sparts_offset].gpart =
                 &gparts[j];
+          } else if (gparts[j].type == swift_type_sink) {
+            sinks[-gparts[j].id_or_neg_offset - sinks_offset].gpart =
+                &gparts[j];
           } else if (gparts[j].type == swift_type_black_hole) {
             bparts[-gparts[j].id_or_neg_offset - bparts_offset].gpart =
                 &gparts[j];
@@ -1953,6 +2125,8 @@ void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
         } else if (gparts[k].type == swift_type_stars) {
           sparts[-gparts[k].id_or_neg_offset - sparts_offset].gpart =
               &gparts[k];
+        } else if (gparts[k].type == swift_type_sink) {
+          sinks[-gparts[k].id_or_neg_offset - sinks_offset].gpart = &gparts[k];
         } else if (gparts[k].type == swift_type_black_hole) {
           bparts[-gparts[k].id_or_neg_offset - bparts_offset].gpart =
               &gparts[k];
@@ -1967,6 +2141,7 @@ void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
     c->progeny[k]->grav.count = bucket_count[k];
     c->progeny[k]->grav.count_total = c->progeny[k]->grav.count;
     c->progeny[k]->grav.parts = &c->grav.parts[bucket_offset[k]];
+    c->progeny[k]->grav.parts_rebuild = c->progeny[k]->grav.parts;
   }
 }
 
@@ -2219,6 +2394,7 @@ void cell_make_multipoles(struct cell *c, integertime_t ti_current,
   gravity_reset(c->grav.multipole);
 
   if (c->split) {
+
     /* Start by recursing */
     for (int k = 0; k < 8; ++k) {
       if (c->progeny[k] != NULL)
@@ -2227,22 +2403,51 @@ void cell_make_multipoles(struct cell *c, integertime_t ti_current,
 
     /* Compute CoM of all progenies */
     double CoM[3] = {0., 0., 0.};
+    double vel[3] = {0., 0., 0.};
+    float max_delta_vel[3] = {0.f, 0.f, 0.f};
+    float min_delta_vel[3] = {0.f, 0.f, 0.f};
     double mass = 0.;
 
     for (int k = 0; k < 8; ++k) {
       if (c->progeny[k] != NULL) {
         const struct gravity_tensors *m = c->progeny[k]->grav.multipole;
+
+        mass += m->m_pole.M_000;
+
         CoM[0] += m->CoM[0] * m->m_pole.M_000;
         CoM[1] += m->CoM[1] * m->m_pole.M_000;
         CoM[2] += m->CoM[2] * m->m_pole.M_000;
-        mass += m->m_pole.M_000;
+
+        vel[0] += m->m_pole.vel[0] * m->m_pole.M_000;
+        vel[1] += m->m_pole.vel[1] * m->m_pole.M_000;
+        vel[2] += m->m_pole.vel[2] * m->m_pole.M_000;
+
+        max_delta_vel[0] = max(m->m_pole.max_delta_vel[0], max_delta_vel[0]);
+        max_delta_vel[1] = max(m->m_pole.max_delta_vel[1], max_delta_vel[1]);
+        max_delta_vel[2] = max(m->m_pole.max_delta_vel[2], max_delta_vel[2]);
+
+        min_delta_vel[0] = min(m->m_pole.min_delta_vel[0], min_delta_vel[0]);
+        min_delta_vel[1] = min(m->m_pole.min_delta_vel[1], min_delta_vel[1]);
+        min_delta_vel[2] = min(m->m_pole.min_delta_vel[2], min_delta_vel[2]);
       }
     }
 
+    /* Final operation on the CoM and bulk velocity */
     const double mass_inv = 1. / mass;
     c->grav.multipole->CoM[0] = CoM[0] * mass_inv;
     c->grav.multipole->CoM[1] = CoM[1] * mass_inv;
     c->grav.multipole->CoM[2] = CoM[2] * mass_inv;
+    c->grav.multipole->m_pole.vel[0] = vel[0] * mass_inv;
+    c->grav.multipole->m_pole.vel[1] = vel[1] * mass_inv;
+    c->grav.multipole->m_pole.vel[2] = vel[2] * mass_inv;
+
+    /* Min max velocity along each axis */
+    c->grav.multipole->m_pole.max_delta_vel[0] = max_delta_vel[0];
+    c->grav.multipole->m_pole.max_delta_vel[1] = max_delta_vel[1];
+    c->grav.multipole->m_pole.max_delta_vel[2] = max_delta_vel[2];
+    c->grav.multipole->m_pole.min_delta_vel[0] = min_delta_vel[0];
+    c->grav.multipole->m_pole.min_delta_vel[1] = min_delta_vel[1];
+    c->grav.multipole->m_pole.min_delta_vel[2] = min_delta_vel[2];
 
     /* Now shift progeny multipoles and add them up */
     struct multipole temp;
@@ -2281,23 +2486,22 @@ void cell_make_multipoles(struct cell *c, integertime_t ti_current,
     /* Take minimum of both limits */
     c->grav.multipole->r_max = min(r_max, sqrt(dx * dx + dy * dy + dz * dz));
 
+    /* Compute the multipole power */
+    gravity_multipole_compute_power(&c->grav.multipole->m_pole);
+
   } else {
     if (c->grav.count > 0) {
+
       gravity_P2M(c->grav.multipole, c->grav.parts, c->grav.count, grav_props);
-      const double dx =
-          c->grav.multipole->CoM[0] > c->loc[0] + c->width[0] * 0.5
-              ? c->grav.multipole->CoM[0] - c->loc[0]
-              : c->loc[0] + c->width[0] - c->grav.multipole->CoM[0];
-      const double dy =
-          c->grav.multipole->CoM[1] > c->loc[1] + c->width[1] * 0.5
-              ? c->grav.multipole->CoM[1] - c->loc[1]
-              : c->loc[1] + c->width[1] - c->grav.multipole->CoM[1];
-      const double dz =
-          c->grav.multipole->CoM[2] > c->loc[2] + c->width[2] * 0.5
-              ? c->grav.multipole->CoM[2] - c->loc[2]
-              : c->loc[2] + c->width[2] - c->grav.multipole->CoM[2];
-      c->grav.multipole->r_max = sqrt(dx * dx + dy * dy + dz * dz);
+
+      /* Compute the multipole power */
+      gravity_multipole_compute_power(&c->grav.multipole->m_pole);
+
     } else {
+
+      /* No gparts in that leaf cell */
+
+      /* Set the values to something sensible */
       gravity_multipole_init(&c->grav.multipole->m_pole);
       c->grav.multipole->CoM[0] = c->loc[0] + c->width[0] * 0.5;
       c->grav.multipole->CoM[1] = c->loc[1] + c->width[1] * 0.5;
@@ -2377,6 +2581,7 @@ void cell_check_multipole(struct cell *c,
   if (c->grav.count > 0) {
     /* Brute-force calculation */
     gravity_P2M(&ma, c->grav.parts, c->grav.count, grav_props);
+    gravity_multipole_compute_power(&ma.m_pole);
 
     /* Now  compare the multipole expansion */
     if (!gravity_multipole_equal(&ma, c->grav.multipole, tolerance)) {
@@ -2427,6 +2632,7 @@ void cell_clean(struct cell *c) {
 void cell_clear_drift_flags(struct cell *c, void *data) {
   cell_clear_flag(c, cell_flag_do_hydro_drift | cell_flag_do_hydro_sub_drift |
                          cell_flag_do_grav_drift | cell_flag_do_grav_sub_drift |
+                         cell_flag_do_bh_drift | cell_flag_do_bh_sub_drift |
                          cell_flag_do_stars_drift |
                          cell_flag_do_stars_sub_drift);
 }
@@ -2557,6 +2763,50 @@ void cell_activate_hydro_ghosts(struct cell *c, struct scheduler *s,
   scheduler_activate(s, c->hydro.ghost_in);
   scheduler_activate(s, c->hydro.ghost_out);
   cell_recursively_activate_hydro_ghosts(c, s, e);
+}
+
+/**
+ * @brief Recursively activate the cooling (and implicit links) in a cell
+ * hierarchy.
+ *
+ * @param c The #cell.
+ * @param s The #scheduler.
+ * @param e The #engine.
+ */
+void cell_recursively_activate_cooling(struct cell *c, struct scheduler *s,
+                                       const struct engine *e) {
+  /* Early abort? */
+  if ((c->hydro.count == 0) || !cell_is_active_hydro(c, e)) return;
+
+  /* Is the ghost at this level? */
+  if (c->hydro.cooling != NULL) {
+    scheduler_activate(s, c->hydro.cooling);
+  } else {
+
+#ifdef SWIFT_DEBUG_CHECKS
+    if (!c->split)
+      error("Reached the leaf level without finding a cooling task!");
+#endif
+
+    /* Keep recursing */
+    for (int k = 0; k < 8; k++)
+      if (c->progeny[k] != NULL)
+        cell_recursively_activate_cooling(c->progeny[k], s, e);
+  }
+}
+
+/**
+ * @brief Activate the cooling tasks (and implicit links) in a cell hierarchy.
+ *
+ * @param c The #cell.
+ * @param s The #scheduler.
+ * @param e The #engine.
+ */
+void cell_activate_cooling(struct cell *c, struct scheduler *s,
+                           const struct engine *e) {
+  scheduler_activate(s, c->hydro.cooling_in);
+  scheduler_activate(s, c->hydro.cooling_out);
+  cell_recursively_activate_cooling(c, s, e);
 }
 
 /**
@@ -3320,7 +3570,9 @@ void cell_activate_subcell_grav_tasks(struct cell *ci, struct cell *cj,
     if (lock_unlock(&cj->grav.mlock) != 0) error("Impossible to unlock m-pole");
 
     /* Can we use multipoles ? */
-    if (cell_can_use_pair_mm(ci, cj, e, sp)) {
+    if (cell_can_use_pair_mm(ci, cj, e, sp, /*use_rebuild_data=*/0,
+                             /*is_tree_walk=*/1)) {
+
       /* Ok, no need to drift anything */
       return;
     }
@@ -3666,7 +3918,7 @@ int cell_unskip_hydro_tasks(struct cell *c, struct scheduler *s) {
     if (c->kick2 != NULL) scheduler_activate(s, c->kick2);
     if (c->timestep != NULL) scheduler_activate(s, c->timestep);
     if (c->hydro.end_force != NULL) scheduler_activate(s, c->hydro.end_force);
-    if (c->hydro.cooling != NULL) scheduler_activate(s, c->hydro.cooling);
+    if (c->hydro.cooling_in != NULL) cell_activate_cooling(c, s, e);
 #ifdef WITH_LOGGER
     if (c->logger != NULL) scheduler_activate(s, c->logger);
 #endif
@@ -4709,6 +4961,7 @@ void cell_drift_gpart(struct cell *c, const struct engine *e, int force) {
   const integertime_t ti_old_gpart = c->grav.ti_old_part;
   const integertime_t ti_current = e->ti_current;
   struct gpart *const gparts = c->grav.parts;
+  const struct gravity_props *grav_props = e->gravity_properties;
 
   /* Drift irrespective of cell flags? */
   force = (force || cell_get_flag(c, cell_flag_do_grav_drift));
@@ -4770,7 +5023,7 @@ void cell_drift_gpart(struct cell *c, const struct engine *e, int force) {
       if (gpart_is_inhibited(gp, e)) continue;
 
       /* Drift... */
-      drift_gpart(gp, dt_drift, ti_old_gpart, ti_current);
+      drift_gpart(gp, dt_drift, ti_old_gpart, ti_current, grav_props);
 
 #ifdef SWIFT_DEBUG_CHECKS
       /* Make sure the particle does not drift by more than a box length. */
@@ -5358,16 +5611,31 @@ void cell_check_timesteps(const struct cell *c, const integertime_t ti_current,
   /* Only check cells that have at least one non-inhibited particle */
   if (count > 0) {
 
-    if (ti_end_min != c->hydro.ti_end_min)
-      error(
-          "Non-matching ti_end_min. Cell=%lld true=%lld ti_current=%lld "
-          "depth=%d",
-          c->hydro.ti_end_min, ti_end_min, ti_current, c->depth);
+    if (count != c->hydro.count) {
+
+      /* Note that we use a < as the particle with the smallest time-bin
+         might have been swallowed. This means we will run this cell with
+         0 active particles but that's not wrong */
+      if (ti_end_min < c->hydro.ti_end_min)
+        error(
+            "Non-matching ti_end_min. Cell=%lld true=%lld ti_current=%lld "
+            "depth=%d",
+            c->hydro.ti_end_min, ti_end_min, ti_current, c->depth);
+
+    } else /* Normal case: nothing was swallowed/converted */ {
+      if (ti_end_min != c->hydro.ti_end_min)
+        error(
+            "Non-matching ti_end_min. Cell=%lld true=%lld ti_current=%lld "
+            "depth=%d",
+            c->hydro.ti_end_min, ti_end_min, ti_current, c->depth);
+    }
+
     if (ti_end_max > c->hydro.ti_end_max)
       error(
           "Non-matching ti_end_max. Cell=%lld true=%lld ti_current=%lld "
           "depth=%d",
           c->hydro.ti_end_max, ti_end_max, ti_current, c->depth);
+
     if (ti_beg_max != c->hydro.ti_beg_max)
       error(
           "Non-matching ti_beg_max. Cell=%lld true=%lld ti_current=%lld "
@@ -5577,11 +5845,14 @@ struct spart *cell_add_spart(struct engine *e, struct cell *const c) {
   lock_lock(&top->stars.star_formation_lock);
 
   /* Are there any extra particles left? */
-  if (top->stars.count == top->stars.count_total - 1) {
+  if (top->stars.count == top->stars.count_total) {
+
+    message("We ran out of free star particles!");
+
     /* Release the local lock before exiting. */
     if (lock_unlock(&top->stars.star_formation_lock) != 0)
       error("Failed to unlock the top-level cell.");
-    message("We ran out of star particles!");
+
     atomic_inc(&e->forcerebuild);
     return NULL;
   }
@@ -5709,11 +5980,14 @@ struct gpart *cell_add_gpart(struct engine *e, struct cell *c) {
   lock_lock(&top->grav.star_formation_lock);
 
   /* Are there any extra particles left? */
-  if (top->grav.count == top->grav.count_total - 1) {
+  if (top->grav.count == top->grav.count_total) {
+
+    message("We ran out of free gravity particles!");
+
     /* Release the local lock before exiting. */
     if (lock_unlock(&top->grav.star_formation_lock) != 0)
       error("Failed to unlock the top-level cell.");
-    message("We ran out of gravity particles!");
+
     atomic_inc(&e->forcerebuild);
     return NULL;
   }
@@ -6158,8 +6432,8 @@ struct spart *cell_spawn_new_spart_from_part(struct engine *e, struct cell *c,
   /* Copy the gpart */
   *gp = *p->gpart;
 
-  /* Assign the ID back */
-  sp->id = p->id;
+  /* Assign the ID. */
+  sp->id = space_get_new_unique_id(e->s);
   gp->type = swift_type_stars;
 
   /* Re-link things */
@@ -6355,25 +6629,46 @@ void cell_reorder_extra_gparts(struct cell *c, struct part *parts,
 /**
  * @brief Can we use the MM interactions fo a given pair of cells?
  *
+ * The two cells have to be different!
+ *
  * @param ci The first #cell.
  * @param cj The second #cell.
  * @param e The #engine.
  * @param s The #space.
+ * @param use_rebuild_data Are we considering the data at the last tree-build
+ * (1) or current data (0)?
+ * @param is_tree_walk Are we calling this in the tree walk (1) or for the
+ * top-level task construction (0)?
  */
-int cell_can_use_pair_mm(const struct cell *ci, const struct cell *cj,
-                         const struct engine *e, const struct space *s) {
-  const double theta_crit2 = e->gravity_properties->theta_crit2;
+int cell_can_use_pair_mm(const struct cell *restrict ci,
+                         const struct cell *restrict cj, const struct engine *e,
+                         const struct space *s, const int use_rebuild_data,
+                         const int is_tree_walk) {
+
+  const struct gravity_props *props = e->gravity_properties;
   const int periodic = s->periodic;
   const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
 
+  /* Check for trivial cases */
+  if (is_tree_walk && ci->grav.count <= 1) return 0;
+  if (is_tree_walk && cj->grav.count <= 1) return 0;
+
   /* Recover the multipole information */
-  const struct gravity_tensors *const multi_i = ci->grav.multipole;
-  const struct gravity_tensors *const multi_j = cj->grav.multipole;
+  const struct gravity_tensors *restrict multi_i = ci->grav.multipole;
+  const struct gravity_tensors *restrict multi_j = cj->grav.multipole;
+
+  double dx, dy, dz;
 
   /* Get the distance between the CoMs */
-  double dx = multi_i->CoM[0] - multi_j->CoM[0];
-  double dy = multi_i->CoM[1] - multi_j->CoM[1];
-  double dz = multi_i->CoM[2] - multi_j->CoM[2];
+  if (use_rebuild_data) {
+    dx = multi_i->CoM_rebuild[0] - multi_j->CoM_rebuild[0];
+    dy = multi_i->CoM_rebuild[1] - multi_j->CoM_rebuild[1];
+    dz = multi_i->CoM_rebuild[2] - multi_j->CoM_rebuild[2];
+  } else {
+    dx = multi_i->CoM[0] - multi_j->CoM[0];
+    dy = multi_i->CoM[1] - multi_j->CoM[1];
+    dz = multi_i->CoM[2] - multi_j->CoM[2];
+  }
 
   /* Apply BC */
   if (periodic) {
@@ -6383,75 +6678,6 @@ int cell_can_use_pair_mm(const struct cell *ci, const struct cell *cj,
   }
   const double r2 = dx * dx + dy * dy + dz * dz;
 
-  const double epsilon_i = multi_i->m_pole.max_softening;
-  const double epsilon_j = multi_j->m_pole.max_softening;
-
-  return gravity_M2L_accept(multi_i->r_max, multi_j->r_max, theta_crit2, r2,
-                            epsilon_i, epsilon_j);
-}
-
-/**
- * @brief Can we use the MM interactions fo a given pair of cells?
- *
- * This function uses the information gathered in the multipole at rebuild
- * time and not the current position and radius of the multipole.
- *
- * @param ci The first #cell.
- * @param cj The second #cell.
- * @param e The #engine.
- * @param s The #space.
- */
-int cell_can_use_pair_mm_rebuild(const struct cell *ci, const struct cell *cj,
-                                 const struct engine *e,
-                                 const struct space *s) {
-  const double theta_crit2 = e->gravity_properties->theta_crit2;
-  const int periodic = s->periodic;
-  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
-
-  /* Recover the multipole information */
-  const struct gravity_tensors *const multi_i = ci->grav.multipole;
-  const struct gravity_tensors *const multi_j = cj->grav.multipole;
-
-#ifdef SWIFT_DEBUG_CHECKS
-
-  if (multi_i->CoM_rebuild[0] < ci->loc[0] ||
-      multi_i->CoM_rebuild[0] > ci->loc[0] + ci->width[0])
-    error("Invalid multipole position ci");
-  if (multi_i->CoM_rebuild[1] < ci->loc[1] ||
-      multi_i->CoM_rebuild[1] > ci->loc[1] + ci->width[1])
-    error("Invalid multipole position ci");
-  if (multi_i->CoM_rebuild[2] < ci->loc[2] ||
-      multi_i->CoM_rebuild[2] > ci->loc[2] + ci->width[2])
-    error("Invalid multipole position ci");
-
-  if (multi_j->CoM_rebuild[0] < cj->loc[0] ||
-      multi_j->CoM_rebuild[0] > cj->loc[0] + cj->width[0])
-    error("Invalid multipole position cj");
-  if (multi_j->CoM_rebuild[1] < cj->loc[1] ||
-      multi_j->CoM_rebuild[1] > cj->loc[1] + cj->width[1])
-    error("Invalid multipole position cj");
-  if (multi_j->CoM_rebuild[2] < cj->loc[2] ||
-      multi_j->CoM_rebuild[2] > cj->loc[2] + cj->width[2])
-    error("Invalid multipole position cj");
-
-#endif
-
-  /* Get the distance between the CoMs */
-  double dx = multi_i->CoM_rebuild[0] - multi_j->CoM_rebuild[0];
-  double dy = multi_i->CoM_rebuild[1] - multi_j->CoM_rebuild[1];
-  double dz = multi_i->CoM_rebuild[2] - multi_j->CoM_rebuild[2];
-
-  /* Apply BC */
-  if (periodic) {
-    dx = nearest(dx, dim[0]);
-    dy = nearest(dy, dim[1]);
-    dz = nearest(dz, dim[2]);
-  }
-  const double r2 = dx * dx + dy * dy + dz * dz;
-
-  const double epsilon_i = multi_i->m_pole.max_softening;
-  const double epsilon_j = multi_j->m_pole.max_softening;
-
-  return gravity_M2L_accept(multi_i->r_max_rebuild, multi_j->r_max_rebuild,
-                            theta_crit2, r2, epsilon_i, epsilon_j);
+  return gravity_M2L_accept_symmetric(props, multi_i, multi_j, r2,
+                                      use_rebuild_data, periodic);
 }

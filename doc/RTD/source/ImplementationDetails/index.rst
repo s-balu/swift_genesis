@@ -1,8 +1,16 @@
-.. Random number generator
-   Folkert Nobels, 11th of July 2019
+.. Implementation details
+   Loic Hausammann, 2020
+   Matthieu Schaller, 2020
+
+.. _implementation_details:
+
+Implementation details
+======================
+
+This section contains technical information about internals of the code.
 
 Random number generator
-=======================
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Often subgrid models require random numbers, for this purpose 
 SWIFT has a random number generator. The random number generator
@@ -16,7 +24,7 @@ significantly smaller and around :math:`2^{-48} \approx 3.5 \times 10^{-15}`,
 so this is very suitable for our applications. 
 
 Reproducible random numbers
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------
 
 In our simulations we want to be able to reproduce the exact same random 
 numbers if we do exactly the same simulation twice. Because of this we 
@@ -35,7 +43,7 @@ This option simply flip some bits in the initial number composed of the ID and t
 current simulation time through the binary operator XOR.
 
 Implementation
-~~~~~~~~~~~~~~
+--------------
 
 Our random number generator packs the particle ID (plus the random number type) and
 the current simulation time as two 64-bit values, plus a constant 16-bit value,
@@ -52,7 +60,7 @@ time with the last state, producing a random double-precision value with a
 48-bit mantissa.
 
 What to do if we break the random number generator?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------------------------------
 
 The most likely case is that the RNG is not strong enough for our application,
 in this case we could simply do multiple passes of both shuffling the state and
@@ -63,3 +71,38 @@ An other case is that we need probabilities that are lower than :math:`1 \times 
 in this case we simply cannot use our random number generator and for example
 need to generate two random numbers in order to probe these low probabilities. 
 
+
+------------------------------------------------------
+
+Generating new unique IDs
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When spawning new particles (not converting them) for star formation or other
+similar processes, the code needs to create new unique particle IDs. This is
+implemented in the file ``space_unique_id.c`` and can be switched on/off in the
+star formation file ``star_formation_struct.h`` by setting the variable
+``star_formation_need_unique_id`` to 1 or 0.
+
+The generation of new IDs is done by computing the maximal ID present in the
+initial condition (across all particle types) and then attributing two batches
+of new, unused IDs to each MPI rank.  The size of each batch is computed in the
+same way as the count of extra particles in order to ensure that we will have
+enough available IDs between two tree rebuilds (where the extra particles are
+regenerated).
+
+When a new ID is requested, the next available ID in the first batch is
+returned. If the last available ID in the first batch is requested, we switch to
+the next batch of IDs and flag it for regeneration at the next rebuild time.  If
+the second batch is also fully used, the code will exit with an error message
+[#f1]_. At each tree-rebuild steps, the ranks will request a new batch if
+required and make sure the batches are unique across all MPI ranks.
+
+As we are using the maximal ID from the ICs, nothing can be done against the user
+providing the maximal integer possible as an ID (that can for instance be the
+case in some of the EAGLE ICs as the ID encode their Lagrangian position on a
+Peano-Hilbert curve). 
+
+
+.. [#f1] Thanks to the size of the fresh ID batches, the code should run out of
+	 extra particles before reaching this point and triggered a new rebuild
+	 if this is allowed by the star formation scheme.

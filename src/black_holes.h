@@ -22,7 +22,7 @@
 /* Config parameters. */
 #include "../config.h"
 
-/* Select the correct star model */
+/* Select the correct BH model */
 #if defined(BLACK_HOLES_NONE)
 #include "./black_holes/Default/black_holes.h"
 #include "./black_holes/Default/black_holes_iact.h"
@@ -30,7 +30,7 @@
 #include "./black_holes/EAGLE/black_holes.h"
 #include "./black_holes/EAGLE/black_holes_iact.h"
 #else
-#error "Invalid choice of star model"
+#error "Invalid choice of black hole model"
 #endif
 
 #endif

@@ -29,13 +29,15 @@
 /* Includes. */
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Local includes. */
 #include "align.h"
 #include "kernel_hydro.h"
 #include "lock.h"
-#include "multipole.h"
+#include "multipole_struct.h"
 #include "part.h"
+#include "periodic.h"
 #include "sort_part.h"
 #include "space.h"
 #include "star_formation_logger_struct.h"
@@ -271,6 +273,17 @@ struct pcell_sf {
     float dx_max_part;
 
   } stars;
+
+  /*! Grav. variables */
+  struct {
+
+    /* Distance by which the gpart pointer has moved since the last rebuild */
+    ptrdiff_t delta_from_rebuild;
+
+    /* Number of particles in the cell */
+    int count;
+
+  } grav;
 };
 
 /**
@@ -377,6 +390,12 @@ struct cell {
     /*! The task to end the force calculation */
     struct task *end_force;
 
+    /*! Dependency implicit task for cooling (in->cooling->out) */
+    struct task *cooling_in;
+
+    /*! Dependency implicit task for cooling (in->cooling->out) */
+    struct task *cooling_out;
+
     /*! Task for cooling */
     struct task *cooling;
 
@@ -458,6 +477,9 @@ struct cell {
 
     /*! Pointer to the #gpart data. */
     struct gpart *parts;
+
+    /*! Pointer to the #spart data at rebuild time. */
+    struct gpart *parts_rebuild;
 
     /*! This cell's multipole. */
     struct gravity_tensors *multipole;
@@ -730,6 +752,39 @@ struct cell {
 
   } black_holes;
 
+  /*! Sink particles variables */
+  struct {
+
+    /*! Pointer to the #sink data. */
+    struct sink *parts;
+
+    /*! Nr of #sink in this cell. */
+    int count;
+
+    /*! Nr of #sink this cell can hold after addition of new one. */
+    int count_total;
+
+    /*! Is the #sink data of this cell being used in a sub-cell? */
+    int hold;
+
+    /*! Spin lock for various uses (#sink case). */
+    swift_lock_type lock;
+
+    /*! Last (integer) time the cell's sink were drifted forward in time. */
+    integertime_t ti_old_part;
+
+    /*! Minimum end of (integer) time step in this cell for sink tasks. */
+    integertime_t ti_end_min;
+
+    /*! Maximum end of (integer) time step in this cell for sink tasks. */
+    integertime_t ti_end_max;
+
+    /*! Maximum beginning of (integer) time step in this cell for sink
+     * tasks.
+     */
+    integertime_t ti_beg_max;
+  } sinks;
+
 #ifdef WITH_MPI
   /*! MPI variables */
   struct {
@@ -821,9 +876,10 @@ struct cell {
 
 /* Function prototypes. */
 void cell_split(struct cell *c, ptrdiff_t parts_offset, ptrdiff_t sparts_offset,
-                ptrdiff_t bparts_offset, struct cell_buff *buff,
-                struct cell_buff *sbuff, struct cell_buff *bbuff,
-                struct cell_buff *gbuff);
+                ptrdiff_t bparts_offset, ptrdiff_t sinks_offset,
+                struct cell_buff *buff, struct cell_buff *sbuff,
+                struct cell_buff *bbuff, struct cell_buff *gbuff,
+                struct cell_buff *sinkbuff);
 void cell_sanitize(struct cell *c, int treated);
 int cell_locktree(struct cell *c);
 void cell_unlocktree(struct cell *c);
@@ -833,6 +889,8 @@ int cell_mlocktree(struct cell *c);
 void cell_munlocktree(struct cell *c);
 int cell_slocktree(struct cell *c);
 void cell_sunlocktree(struct cell *c);
+int cell_sink_locktree(struct cell *c);
+void cell_sink_unlocktree(struct cell *c);
 int cell_blocktree(struct cell *c);
 void cell_bunlocktree(struct cell *c);
 int cell_pack(struct cell *c, struct pcell *pc, const int with_gravity);
@@ -957,9 +1015,8 @@ void cell_reorder_extra_gparts(struct cell *c, struct part *parts,
                                struct spart *sparts);
 void cell_reorder_extra_sparts(struct cell *c, const ptrdiff_t sparts_offset);
 int cell_can_use_pair_mm(const struct cell *ci, const struct cell *cj,
-                         const struct engine *e, const struct space *s);
-int cell_can_use_pair_mm_rebuild(const struct cell *ci, const struct cell *cj,
-                                 const struct engine *e, const struct space *s);
+                         const struct engine *e, const struct space *s,
+                         const int use_rebuild_data, const int is_tree_walk);
 
 /**
  * @brief Compute the square of the minimal distance between any two points in
@@ -1216,7 +1273,7 @@ __attribute__((always_inline)) INLINE static int cell_can_split_self_fof_task(
  * @param ci The first #cell.
  * @param cj The second #cell.
  */
-__attribute__((always_inline)) INLINE static int
+__attribute__((always_inline, nonnull)) INLINE static int
 cell_need_rebuild_for_hydro_pair(const struct cell *ci, const struct cell *cj) {
 
   /* Is the cut-off radius plus the max distance the parts in both cells have */
@@ -1237,7 +1294,7 @@ cell_need_rebuild_for_hydro_pair(const struct cell *ci, const struct cell *cj) {
  * @param ci The first #cell.
  * @param cj The second #cell.
  */
-__attribute__((always_inline)) INLINE static int
+__attribute__((always_inline, nonnull)) INLINE static int
 cell_need_rebuild_for_stars_pair(const struct cell *ci, const struct cell *cj) {
 
   /* Is the cut-off radius plus the max distance the parts in both cells have */
@@ -1258,7 +1315,7 @@ cell_need_rebuild_for_stars_pair(const struct cell *ci, const struct cell *cj) {
  * @param ci The first #cell.
  * @param cj The second #cell.
  */
-__attribute__((always_inline)) INLINE static int
+__attribute__((always_inline, nonnull)) INLINE static int
 cell_need_rebuild_for_black_holes_pair(const struct cell *ci,
                                        const struct cell *cj) {
 

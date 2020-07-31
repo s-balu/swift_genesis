@@ -35,7 +35,7 @@ INLINE static void black_holes_read_particles(struct bpart* bparts,
                                               int* num_fields) {
 
   /* Say how much we want to read */
-  *num_fields = 6;
+  *num_fields = 7;
 
   /* List what we want to read */
   list[0] = io_make_input_field("Coordinates", DOUBLE, 3, COMPULSORY,
@@ -50,6 +50,8 @@ INLINE static void black_holes_read_particles(struct bpart* bparts,
                                 UNIT_CONV_LENGTH, bparts, h);
   list[5] = io_make_input_field("EnergyReservoir", FLOAT, 1, OPTIONAL,
                                 UNIT_CONV_ENERGY, bparts, energy_reservoir);
+  list[6] = io_make_input_field("SubgridMasses", FLOAT, 1, OPTIONAL,
+                                UNIT_CONV_MASS, bparts, subgrid_mass);
 }
 
 INLINE static void convert_bpart_pos(const struct engine* e,
@@ -94,10 +96,33 @@ INLINE static void convert_bpart_vel(const struct engine* e,
   ret[1] = gp->v_full[1] + gp->a_grav[1] * dt_kick_grav;
   ret[2] = gp->v_full[2] + gp->a_grav[2] * dt_kick_grav;
 
-  /* Conversion from internal units to peculiar velocities */
+  /* Conversion from internal to physical units */
   ret[0] *= cosmo->a_inv;
   ret[1] *= cosmo->a_inv;
   ret[2] *= cosmo->a_inv;
+}
+
+INLINE static void convert_bpart_gas_vel(const struct engine* e,
+                                         const struct bpart* bp, float* ret) {
+
+  const struct cosmology* cosmo = e->cosmology;
+
+  /* Convert relative velocities to physical units */
+  ret[0] = bp->velocity_gas[0] * cosmo->a_inv;
+  ret[1] = bp->velocity_gas[1] * cosmo->a_inv;
+  ret[2] = bp->velocity_gas[2] * cosmo->a_inv;
+}
+
+INLINE static void convert_bpart_gas_circular_vel(const struct engine* e,
+                                                  const struct bpart* bp,
+                                                  float* ret) {
+
+  const struct cosmology* cosmo = e->cosmology;
+
+  /* Conversion from internal to physical units */
+  ret[0] = bp->circular_velocity_gas[0] * cosmo->a_inv;
+  ret[1] = bp->circular_velocity_gas[1] * cosmo->a_inv;
+  ret[2] = bp->circular_velocity_gas[2] * cosmo->a_inv;
 }
 
 /**
@@ -114,7 +139,7 @@ INLINE static void black_holes_write_particles(const struct bpart* bparts,
                                                int with_cosmology) {
 
   /* Say how much we want to write */
-  *num_fields = 18;
+  *num_fields = 29;
 
   /* List what we want to write */
   list[0] = io_make_output_field_convert_bpart(
@@ -153,12 +178,12 @@ INLINE static void black_holes_write_particles(const struct bpart* bparts,
   }
 
   list[7] = io_make_output_field(
-      "GasDensities", FLOAT, 1, UNIT_CONV_DENSITY, 0.f, bparts, rho_gas,
+      "GasDensities", FLOAT, 1, UNIT_CONV_DENSITY, -3.f, bparts, rho_gas,
       "Co-moving densities of the gas around the particles");
 
   list[8] = io_make_output_field(
-      "GasSoundSpeeds", FLOAT, 1, UNIT_CONV_SPEED, 1.5f * hydro_gamma_minus_one,
-      bparts, sound_speed_gas,
+      "GasSoundSpeeds", FLOAT, 1, UNIT_CONV_SPEED,
+      -1.5f * hydro_gamma_minus_one, bparts, sound_speed_gas,
       "Co-moving sound-speeds of the gas around the particles");
 
   list[9] = io_make_output_field(
@@ -177,7 +202,7 @@ INLINE static void black_holes_write_particles(const struct bpart* bparts,
       "Total mass accreted onto the particles since its birth");
 
   list[12] = io_make_output_field(
-      "CumulativeNumberSeeds", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      "CumulativeNumberOfSeeds", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
       cumulative_number_seeds,
       "Total number of BH seeds that have merged into this black hole");
 
@@ -231,6 +256,77 @@ INLINE static void black_holes_write_particles(const struct bpart* bparts,
       bparts, swallowed_angular_momentum,
       "Physical angular momenta that the black holes have accumulated by "
       "swallowing gas particles.");
+
+  list[18] = io_make_output_field_convert_bpart(
+      "GasRelativeVelocities", FLOAT, 3, UNIT_CONV_SPEED, 0.f, bparts,
+      convert_bpart_gas_vel,
+      "Peculiar relative velocities of the gas particles around the black "
+      "holes. This is a * dx/dt where x is the co-moving position of the "
+      "particles.");
+
+  list[19] = io_make_output_field_convert_bpart(
+      "GasCircularVelocities", FLOAT, 3, UNIT_CONV_SPEED, 0.f, bparts,
+      convert_bpart_gas_circular_vel,
+      "Circular velocities of the gas around the black hole at the "
+      "smoothing radius. This is j / h_BH, where j is the smoothed, peculiar "
+      "specific angular momentum of gas around the black holes, and h_BH is "
+      "the smoothing length of each black hole.");
+
+  list[20] =
+      io_make_output_field("TimeBins", CHAR, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+                           time_bin, "Time-bins of the particles");
+
+  list[21] = io_make_output_field(
+      "NumberOfSwallows", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      number_of_gas_swallows,
+      "Number of gas particles the black holes have swallowed. "
+      "This includes the particles swallowed by any of the black holes that "
+      "merged into this one.");
+
+  list[22] = io_make_output_field(
+      "NumberOfDirectSwallows", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      number_of_direct_gas_swallows,
+      "Number of gas particles the black holes have swallowed. "
+      "This does not include any particles swallowed by any of the black holes "
+      "that merged into this one.");
+
+  list[23] = io_make_output_field(
+      "NumberOfRepositions", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      number_of_repositions,
+      "Number of repositioning events the black holes went through. This does "
+      "not include the number of reposition events accumulated by any merged "
+      "black holes.");
+
+  list[24] = io_make_output_field(
+      "NumberOfRepositionAttempts", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      number_of_reposition_attempts,
+      "Number of time steps in which the black holes had an eligible particle "
+      "to reposition to. They may or may not have ended up moving there, "
+      "depending on their subgrid mass and on whether these particles were at "
+      "a lower or higher potential than the black holes themselves. It does "
+      "not include attempted repositioning events accumulated by any merged "
+      "black holes.");
+
+  list[25] = io_make_output_field(
+      "NumberOfTimeSteps", INT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts,
+      number_of_time_steps,
+      "Total number of time steps at which the black holes were active.");
+
+  list[26] = io_make_output_field(
+      "ViscosityFactors", FLOAT, 1, UNIT_CONV_NO_UNITS, 0.f, bparts, f_visc,
+      "Multiplicative factors by which the Bondi-Hoyle-Lyttleton accretion "
+      "rates have been suppressed by the Rosas-Guevara et al. (2015) "
+      "accretion disc model.");
+
+  list[27] = io_make_output_field(
+      "SubgridDensities", FLOAT, 1, UNIT_CONV_DENSITY, 0.f, bparts,
+      rho_subgrid_gas,
+      "Physical subgrid densities used in the subgrid-Bondi model.");
+
+  list[28] = io_make_output_field(
+      "SubgridSoundSpeeds", FLOAT, 1, UNIT_CONV_SPEED, 0.f, bparts,
+      sound_speed_subgrid_gas,
+      "Physical subgrid sound-speeds used in the subgrid-Bondi model.");
 
 #ifdef DEBUG_INTERACTIONS_BLACK_HOLES
 

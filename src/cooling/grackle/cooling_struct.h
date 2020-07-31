@@ -23,7 +23,7 @@
 #include <grackle.h>
 
 /**
- * @file src/cooling/none/cooling_struct.h
+ * @file src/cooling/grackle/cooling_struct.h
  * @brief Empty infrastructure for the cases without cooling function
  */
 
@@ -78,6 +78,11 @@ struct cooling_function_data {
   /*! Duration for switching off cooling after an event (e.g. supernovae) */
   float thermal_time;
 };
+
+/**
+ * @brief Properties of the cooling stored in the #part data.
+ */
+struct cooling_part_data {};
 
 /**
  * @brief Properties of the cooling stored in the extra particle data

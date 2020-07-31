@@ -30,32 +30,27 @@
 #endif
 
 /* Includes. */
-#include "engine.h"
-#include "io_properties.h"
 #include "part.h"
-#include "units.h"
+
+struct engine;
+struct unit_system;
 
 void read_ic_serial(char* fileName, const struct unit_system* internal_units,
                     double dim[3], struct part** parts, struct gpart** gparts,
-                    struct spart** sparts, struct bpart** bparts, size_t* Ngas,
-                    size_t* Ngparts, size_t* Ngparts_background, size_t* Nstars,
+                    struct sink** sinks, struct spart** sparts,
+                    struct bpart** bparts, size_t* Ngas, size_t* Ngparts,
+                    size_t* Ngparts_background, size_t* Nsinks, size_t* Nstars,
                     size_t* Nblackholes, int* flag_entropy, int with_hydro,
-                    int with_gravity, int with_stars, int with_black_holes,
-                    int with_cosmology, int cleanup_h, int cleanup_sqrt_a,
-                    double h, double a, int mpi_rank, int mpi_size,
-                    MPI_Comm comm, MPI_Info info, int n_threads, int dry_run);
+                    int with_gravity, int with_sinks, int with_stars,
+                    int with_black_holes, int with_cosmology, int cleanup_h,
+                    int cleanup_sqrt_a, double h, double a, int mpi_rank,
+                    int mpi_size, MPI_Comm comm, MPI_Info info, int n_threads,
+                    int dry_run);
 
-void write_output_serial(struct engine* e, const char* baseName,
+void write_output_serial(struct engine* e,
                          const struct unit_system* internal_units,
                          const struct unit_system* snapshot_units, int mpi_rank,
                          int mpi_size, MPI_Comm comm, MPI_Info info);
-
-void writeArray(const struct engine* e, hid_t grp, char* fileName,
-                FILE* xmfFile, char* partTypeGroupName,
-                const struct io_props props, size_t N, long long N_total,
-                int mpi_rank, long long offset,
-                const struct unit_system* internal_units,
-                const struct unit_system* snapshot_units);
 
 #endif /* HAVE_HDF5 && WITH_MPI && !HAVE_PARALLEL_HDF5 */
 

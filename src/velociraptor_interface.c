@@ -456,6 +456,7 @@ void velociraptor_init(struct engine *e) {
             unit_info.energyperunitmass);
     message("VELOCIraptor conf: G: %e", unit_info.gravity);
     message("VELOCIraptor conf: H0/h: %e", unit_info.hubbleunit);
+    message("VELOCIraptor conf: Config file name: %s", e->stf_config_file_name);
     message("VELOCIraptor conf: Cosmological Simulation: %d",
             sim_info.icosmologicalsim);
     message("VELOCIraptor conf: Config file name: %s", e->stf_config_file_name);
@@ -504,7 +505,6 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   const size_t nr_gparts = s->nr_gparts;
   const size_t nr_parts = s->nr_parts;
   const size_t nr_sparts = s->nr_sparts;
-  // const size_t nr_bparts = s->nr_bparts;
   const int nr_cells = s->nr_cells;
   const struct cell *cells_top = s->cells_top;
   int iextraoutput;
@@ -713,11 +713,9 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
                    e->snapshot_subdir) >= FILENAME_BUFFER_SIZE) {
         error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
       }
+    if (engine_rank == 0) io_make_snapshot_subdir(outputDirName);
 #ifdef WITH_MPI
-    if (engine_rank == 0) mkdir(outputDirName, 0777);
     MPI_Barrier(MPI_COMM_WORLD);
-#else
-    mkdir(outputDirName, 0777);
 #endif
     }
   } else if(linked_with_snap == 0){
@@ -726,11 +724,9 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
                    e->stf_subdir) >= FILENAME_BUFFER_SIZE) {
         error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
       }
+    if (engine_rank == 0) io_make_snapshot_subdir(outputDirName);  
 #ifdef WITH_MPI
-    if (engine_rank == 0) mkdir(outputDirName, 0777);
     MPI_Barrier(MPI_COMM_WORLD);
-#else
-    mkdir(outputDirName, 0777);
 #endif
     }
   }
@@ -744,11 +740,9 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
       error(
           "FILENAME_BUFFER_SIZE is to small for Velociraptor directory name!");
     }
+    if (engine_rank == 0) io_make_snapshot_subdir(subDirName);  
 #ifdef WITH_MPI
-    if (engine_rank == 0) mkdir(subDirName, 0777);
     MPI_Barrier(MPI_COMM_WORLD);
-#else
-    mkdir(subDirName, 0777);
 #endif
   } else {
     /* Not making separate directories so subDirName=outputDirName */
@@ -805,9 +799,6 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   /* Allocate and populate an array of swift_vel_parts to be passed to
    * VELOCIraptor. */
   struct swift_vel_part *swift_parts = NULL;
-  // struct swift_vel_gas_part *swift_gas_parts = NULL;
-  // struct swift_vel_star_part *swift_star_parts = NULL;
-  // struct swift_vel_bh_part *swift_bh_parts = NULL;
   if (swift_memalign("VR.parts", (void **)&swift_parts, part_align,
                      nr_gparts * sizeof(struct swift_vel_part)) != 0)
     error("Failed to allocate array of particles for VELOCIraptor.");
@@ -878,22 +869,22 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   memuse_log_allocation("VR.parts", swift_parts, 0, 0);
 
   /* Check that the ouput is valid */
-  if (linked_with_snap > 0 && group_info == NULL && num_gparts_in_groups < 0) {
+  if (linked_with_snap && group_info == NULL && num_gparts_in_groups < 0) {
     error("Exiting. Call to VELOCIraptor failed on rank: %d.", e->nodeID);
   }
-  if (linked_with_snap <= 0 && group_info != NULL) {
+  if (!linked_with_snap && group_info != NULL) {
     error("VELOCIraptor returned an array whilst it should not have.");
   }
 
   /* Report timing */
   if (e->verbose)
-    message("VR Invocation of velociraptor took %.3f %s.",
+    message("VR Invokation of velociraptor took %.3f %s.",
             clocks_from_ticks(getticks() - tic), clocks_getunit());
 
   tic = getticks();
 
   /* Assign the group IDs back to the gparts */
-  if (linked_with_snap > 0) {
+  if (linked_with_snap) {
 
     if (swift_memalign("VR.group_data", (void **)&s->gpart_group_data,
                        part_align,

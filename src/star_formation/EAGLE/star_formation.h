@@ -41,6 +41,8 @@
  * @brief Star formation model used in the EAGLE model
  */
 
+#define star_formation_need_update_dx_max 0
+
 /**
  * @brief Properties of the EAGLE star formation model.
  */
@@ -456,11 +458,11 @@ INLINE static void star_formation_copy_properties(
   sp->tracers_data = xp->tracers_data;
 
   /* Store the birth density in the star particle */
-  sp->birth_density = hydro_get_physical_density(p, cosmo);
+  sp->sf_data.birth_density = hydro_get_physical_density(p, cosmo);
 
   /* Store the birth temperature in the star particle */
-  sp->birth_temperature = cooling_get_temperature(phys_const, hydro_props, us,
-                                                  cosmo, cooling, p, xp);
+  sp->sf_data.birth_temperature = cooling_get_temperature(
+      phys_const, hydro_props, us, cosmo, cooling, p, xp);
 
   /* Flag that this particle has not done feedback yet */
   sp->f_E = -1.f;

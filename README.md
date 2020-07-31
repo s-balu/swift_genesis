@@ -28,6 +28,42 @@ Please feel free to submit issues to this repository, or even pull
 requests. We will try to deal with them as soon as possible, but as the
 core development team is quite small this could take some time.
 
+Disclaimer
+----------
+
+We would like to emphasise that SWIFT comes without any warranty of accuracy,
+correctness or efficiency. As mentioned in the license, the software comes
+`as-is` and the onus is on the user to get meaningful results. Whilst the
+authors will endeavour to answer questions related to using the code, we
+recommend users build and maintain their own copies. This documentation contains
+the most basic information to get started. Reading it and possibly also the
+source code is the best way to start running simulations.
+
+The users are responsible to understand what the code is doing and for the
+results of their simulation runs.
+
+Note also that the values of the parameters given in the examples are only
+indicative. We recommend users experiment by themselves and a campaign of
+experimentation with various values is highly encouraged. Each problem will
+likely require different values and the sensitivity to the details of the
+physical model is something left to the users to explore.
+
+Acknowledgment & Citation
+-------------------------
+
+In order to keep track of usage and measure the impact of the software, we
+kindly ask users publishing scientific results using SWIFT to add the following
+sentence to the acknowledgment section of their papers:
+
+"The research in this paper made use of the SWIFT open-source
+simulation code (http://www.swiftsim.com, Schaller et al. 2018)
+version X.Y.Z."
+
+with the version number set to the version used for the simulations and the
+reference pointing to the ASCL entry of the code: https://ascl.net/1805.020.
+
+
+
 Contribution Guidelines
 -----------------------
 
@@ -88,9 +124,11 @@ Parameters:
     -s, --hydro                       Run with hydrodynamics.
     -S, --stars                       Run with stars.
     -B, --black-holes                 Run with black holes.
+    -k, --sinks                       Run with sink particles.
     -u, --fof                         Run Friends-of-Friends algorithm to
                                       perform black hole seeding.
     -x, --velociraptor                Run with structure finding.
+    --line-of-sight                   Run with line-of-sight outputs.
     --limiter                         Run with time-step limiter.
     --sync                            Run with time-step synchronization
                                       of particles hit by feedback events.
@@ -141,5 +179,8 @@ Parameters:
                                       are dumped. 
     -Y, --threadpool-dumps=<int>      Time-step frequency at which threadpool
                                       tasks are dumped.
+    --dump-tasks-threshold=<flt>      Fraction of the total step's time spent 
+                                      in a task to trigger a dump of the task plot 
+                                      on this step 
 
 See the file examples/parameter_example.yml for an example of parameter file.

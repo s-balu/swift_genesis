@@ -28,6 +28,7 @@
 #include <string.h>
 
 /* Includes. */
+#include "accumulate.h"
 #include "align.h"
 #include "const.h"
 #include "error.h"
@@ -37,204 +38,21 @@
 #include "gravity_softened_derivatives.h"
 #include "inline.h"
 #include "kernel_gravity.h"
+#include "multipole_struct.h"
 #include "part.h"
 #include "periodic.h"
 #include "vector_power.h"
-
-#define multipole_align 128
-
-struct grav_tensor {
-
-  /* 0th order terms */
-  float F_000;
-
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
-
-  /* 1st order terms */
-  float F_100, F_010, F_001;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 1
-
-  /* 2nd order terms */
-  float F_200, F_020, F_002;
-  float F_110, F_101, F_011;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 2
-
-  /* 3rd order terms */
-  float F_300, F_030, F_003;
-  float F_210, F_201;
-  float F_120, F_021;
-  float F_102, F_012;
-  float F_111;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 3
-
-  /* 4th order terms */
-  float F_400, F_040, F_004;
-  float F_310, F_301;
-  float F_130, F_031;
-  float F_103, F_013;
-  float F_220, F_202, F_022;
-  float F_211, F_121, F_112;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 4
-
-  /* 5th order terms */
-  float F_005, F_014, F_023;
-  float F_032, F_041, F_050;
-  float F_104, F_113, F_122;
-  float F_131, F_140, F_203;
-  float F_212, F_221, F_230;
-  float F_302, F_311, F_320;
-  float F_401, F_410, F_500;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 5
-#error "Missing implementation for order >5"
-#endif
-
-#ifdef SWIFT_GRAVITY_FORCE_CHECKS
-  /* Number of gparts interacted through the tree. */
-  long long num_interacted_tree;
-
-  /* Number of gparts interacted through the FFT mesh */
-  long long num_interacted_pm;
-#endif
-
-#ifdef SWIFT_DEBUG_CHECKS
-  /* Total number of gpart this field tensor interacted with */
-  long long num_interacted;
-
-  /* Last time this tensor was zeroed */
-  integertime_t ti_init;
-
-#endif
-
-  /* Has this tensor received any contribution? */
-  char interacted;
-};
-
-struct multipole {
-
-  /*! Bulk velocity */
-  float vel[3];
-
-  /*! Maximal velocity along each axis of all #gpart */
-  float max_delta_vel[3];
-
-  /*! Minimal velocity along each axis of all #gpart */
-  float min_delta_vel[3];
-
-  /*! Maximal co-moving softening of all the #gpart in the mulipole */
-  float max_softening;
-
-  /* 0th order term */
-  float M_000;
-
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
-
-  /* 1st order terms */
-  float M_100, M_010, M_001;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 1
-
-  /* 2nd order terms */
-  float M_200, M_020, M_002;
-  float M_110, M_101, M_011;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 2
-
-  /* 3rd order terms */
-  float M_300, M_030, M_003;
-  float M_210, M_201;
-  float M_120, M_021;
-  float M_102, M_012;
-  float M_111;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 3
-
-  /* 4th order terms */
-  float M_400, M_040, M_004;
-  float M_310, M_301;
-  float M_130, M_031;
-  float M_103, M_013;
-  float M_220, M_202, M_022;
-  float M_211, M_121, M_112;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 4
-
-  /* 5th order terms */
-  float M_005, M_014, M_023;
-  float M_032, M_041, M_050;
-  float M_104, M_113, M_122;
-  float M_131, M_140, M_203;
-  float M_212, M_221, M_230;
-  float M_302, M_311, M_320;
-  float M_401, M_410, M_500;
-#endif
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 5
-#error "Missing implementation for order >5"
-#endif
-
-#if defined(SWIFT_DEBUG_CHECKS) || defined(SWIFT_GRAVITY_FORCE_CHECKS)
-
-  /* Total number of gpart in this multipole */
-  long long num_gpart;
-
-#endif
-};
-
-/**
- * @brief The multipole expansion of a mass distribution.
- */
-struct gravity_tensors {
-
-  union {
-
-    /*! Linking pointer for "memory management". */
-    struct gravity_tensors *next;
-
-    /*! The actual content */
-    struct {
-
-      /*! Field tensor for the potential */
-      struct grav_tensor pot;
-
-      /*! Multipole mass */
-      struct multipole m_pole;
-
-      /*! Centre of mass of the matter dsitribution */
-      double CoM[3];
-
-      /*! Centre of mass of the matter dsitribution at the last rebuild */
-      double CoM_rebuild[3];
-
-      /*! Upper limit of the CoM<->gpart distance */
-      double r_max;
-
-      /*! Upper limit of the CoM<->gpart distance at the last rebuild */
-      double r_max_rebuild;
-    };
-  };
-} SWIFT_STRUCT_ALIGN;
-
-#ifdef WITH_MPI
-/* MPI datatypes for transfers */
-extern MPI_Datatype multipole_mpi_type;
-extern MPI_Op multipole_mpi_reduce_op;
-void multipole_create_mpi_types(void);
-void multipole_free_mpi_types(void);
-#endif
 
 /**
  * @brief Reset the data of a #multipole.
  *
  * @param m The #multipole.
  */
-INLINE static void gravity_reset(struct gravity_tensors *m) {
+__attribute__((nonnull)) INLINE static void gravity_reset(
+    struct gravity_tensors *m) {
 
-  /* Just bzero the struct. */
   bzero(m, sizeof(struct gravity_tensors));
+  m->m_pole.min_old_a_grav_norm = FLT_MAX;
 }
 
 /**
@@ -246,7 +64,8 @@ INLINE static void gravity_reset(struct gravity_tensors *m) {
  * @param m The #multipole.
  * @param dt The drift time-step.
  */
-INLINE static void gravity_drift(struct gravity_tensors *m, double dt) {
+__attribute__((nonnull)) INLINE static void gravity_drift(
+    struct gravity_tensors *m, double dt) {
 
   /* Motion of the centre of mass */
   const double dx = m->m_pole.vel[0] * dt;
@@ -296,8 +115,8 @@ INLINE static void gravity_drift(struct gravity_tensors *m, double dt) {
  * @param l The field tensor.
  * @param ti_current The current (integer) time (for debugging only).
  */
-INLINE static void gravity_field_tensors_init(struct grav_tensor *l,
-                                              integertime_t ti_current) {
+__attribute__((nonnull)) INLINE static void gravity_field_tensors_init(
+    struct grav_tensor *l, integertime_t ti_current) {
 
   bzero(l, sizeof(struct grav_tensor));
 
@@ -312,7 +131,7 @@ INLINE static void gravity_field_tensors_init(struct grav_tensor *l,
  * @param la The gravity tensors to add to.
  * @param lb The gravity tensors to add.
  */
-INLINE static void gravity_field_tensors_add(
+__attribute__((nonnull)) INLINE static void gravity_field_tensors_add(
     struct grav_tensor *restrict la, const struct grav_tensor *restrict lb) {
 #ifdef SWIFT_DEBUG_CHECKS
   if (lb->num_interacted == 0) error("Adding tensors that did not interact");
@@ -411,7 +230,8 @@ INLINE static void gravity_field_tensors_add(
  *
  * @param l The #grav_tensor to print.
  */
-INLINE static void gravity_field_tensors_print(const struct grav_tensor *l) {
+__attribute__((nonnull)) INLINE static void gravity_field_tensors_print(
+    const struct grav_tensor *l) {
 
   printf("-------------------------\n");
   printf("Interacted: %d\n", l->interacted);
@@ -462,9 +282,11 @@ INLINE static void gravity_field_tensors_print(const struct grav_tensor *l) {
  *
  * @param m The multipole
  */
-INLINE static void gravity_multipole_init(struct multipole *m) {
+__attribute__((nonnull)) INLINE static void gravity_multipole_init(
+    struct multipole *m) {
 
   bzero(m, sizeof(struct multipole));
+  m->min_old_a_grav_norm = FLT_MAX;
 }
 
 /**
@@ -474,7 +296,8 @@ INLINE static void gravity_multipole_init(struct multipole *m) {
  *
  * @param m The #multipole to print.
  */
-INLINE static void gravity_multipole_print(const struct multipole *m) {
+__attribute__((nonnull)) INLINE static void gravity_multipole_print(
+    const struct multipole *m) {
 
   printf("eps_max = %12.5e\n", m->max_softening);
   printf("Vel= [%12.5e %12.5e %12.5e]\n", m->vel[0], m->vel[1], m->vel[2]);
@@ -482,8 +305,7 @@ INLINE static void gravity_multipole_print(const struct multipole *m) {
   printf("M_000= %12.5e\n", m->M_000);
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 0
   printf("-------------------------\n");
-  printf("M_100= %12.5e M_010= %12.5e M_001= %12.5e\n", m->M_100, m->M_010,
-         m->M_001);
+  printf("M_100= %12.5e M_010= %12.5e M_001= %12.5e\n", 0., 0., 0.);
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 1
   printf("-------------------------\n");
@@ -527,20 +349,24 @@ INLINE static void gravity_multipole_print(const struct multipole *m) {
  * @param ma The multipole to add to.
  * @param mb The multipole to add.
  */
-INLINE static void gravity_multipole_add(struct multipole *restrict ma,
-                                         const struct multipole *restrict mb) {
+__attribute__((nonnull)) INLINE static void gravity_multipole_add(
+    struct multipole *restrict ma, const struct multipole *restrict mb) {
 
   /* Maximum of both softenings */
   ma->max_softening = max(ma->max_softening, mb->max_softening);
+
+  /* Minimum of both old accelerations */
+  ma->min_old_a_grav_norm =
+      min(ma->min_old_a_grav_norm, mb->min_old_a_grav_norm);
 
   /* Add 0th order term */
   ma->M_000 += mb->M_000;
 
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 0
-  /* Add 1st order terms */
-  ma->M_100 += mb->M_100;
-  ma->M_010 += mb->M_010;
-  ma->M_001 += mb->M_001;
+  /* Add 1st order terms (all 0 since we expand around CoM) */
+  /* ma->M_100 += mb->M_100; */
+  /* ma->M_010 += mb->M_010; */
+  /* ma->M_001 += mb->M_001; */
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 1
   /* Add 2nd order terms */
@@ -623,9 +449,9 @@ INLINE static void gravity_multipole_add(struct multipole *restrict ma,
  * @param tolerance The maximal allowed relative difference for the fields.
  * @return 1 if the multipoles are equal, 0 otherwise
  */
-INLINE static int gravity_multipole_equal(const struct gravity_tensors *ga,
-                                          const struct gravity_tensors *gb,
-                                          double tolerance) {
+__attribute__((nonnull)) INLINE static int gravity_multipole_equal(
+    const struct gravity_tensors *ga, const struct gravity_tensors *gb,
+    double tolerance) {
 
   /* Check CoM */
   if (fabs(ga->CoM[0] - gb->CoM[0]) / fabs(ga->CoM[0] + gb->CoM[0]) >
@@ -656,6 +482,14 @@ INLINE static int gravity_multipole_equal(const struct gravity_tensors *ga,
           fabsf(ma->max_softening + mb->max_softening) >
       tolerance) {
     message("max softening different!");
+    return 0;
+  }
+
+  /* Check minimal old acceleration norm */
+  if (fabsf(ma->min_old_a_grav_norm - mb->min_old_a_grav_norm) /
+          fabsf(ma->min_old_a_grav_norm + mb->min_old_a_grav_norm + FLT_MIN) >
+      tolerance) {
+    message("min old_a_grav_norm different!");
     return 0;
   }
 
@@ -692,27 +526,9 @@ INLINE static int gravity_multipole_equal(const struct gravity_tensors *ga,
     return 0;
   }
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 0
-  /* Manhattan Norm of 1st order terms */
-  const float order1_norm = fabsf(ma->M_001) + fabsf(mb->M_001) +
-                            fabsf(ma->M_010) + fabsf(mb->M_010) +
-                            fabsf(ma->M_100) + fabsf(mb->M_100);
-
-  /* Compare 1st order terms above 1% of norm */
-  if (fabsf(ma->M_001 + mb->M_001) > 0.01f * order1_norm &&
-      fabsf(ma->M_001 - mb->M_001) / fabsf(ma->M_001 + mb->M_001) > tolerance) {
-    message("M_001 term different");
-    return 0;
-  }
-  if (fabsf(ma->M_010 + mb->M_010) > 0.01f * order1_norm &&
-      fabsf(ma->M_010 - mb->M_010) / fabsf(ma->M_010 + mb->M_010) > tolerance) {
-    message("M_010 term different");
-    return 0;
-  }
-  if (fabsf(ma->M_100 + mb->M_100) > 0.01f * order1_norm &&
-      fabsf(ma->M_100 - mb->M_100) / fabsf(ma->M_100 + mb->M_100) > tolerance) {
-    message("M_100 term different");
-    return 0;
-  }
+    /* Manhattan Norm of 1st order terms */
+    /* Nothing to do here all the 1st order terms are 0 since we expand around
+     * CoM */
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 1
   /* Manhattan Norm of 2nd order terms */
@@ -1038,8 +854,119 @@ INLINE static int gravity_multipole_equal(const struct gravity_tensors *ga,
 #error "Missing implementation for order >5"
 #endif
 
+  /* Compare the multipole power */
+  for (int i = 0; i < SELF_GRAVITY_MULTIPOLE_ORDER + 1; ++i) {
+
+    /* Ignore the order 1 power to avoid FPE since it's always 0 */
+    if (i == 1 || (ma->power[i] + mb->power[i] == 0.)) continue;
+
+    if (fabsf(ma->power[i] - mb->power[i]) /
+            fabsf(ma->power[i] + mb->power[i]) >
+        tolerance)
+      message("Power of order %d different", i);
+  }
+
   /* All is good */
   return 1;
+}
+
+/**
+ * @brief Compute the multipole power of a #multipole.
+ *
+ * @param m The #multipole.
+ */
+__attribute__((nonnull)) INLINE static void gravity_multipole_compute_power(
+    struct multipole *m) {
+
+  double power[SELF_GRAVITY_MULTIPOLE_ORDER + 1] = {0.};
+
+  /* 0th order terms */
+  m->power[0] = m->M_000;
+
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
+  /* 1st order terms (all 0 since we expand around CoM) */
+  // power[1] += m->M_001 * m->M_001;
+  // power[1] += m->M_010 * m->M_010;
+  // power[1] += m->M_100 * m->M_100;
+
+  // m->power[1] = sqrt(power[1]);
+  m->power[1] = 0.;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 1
+  /* 2nd order terms */
+  power[2] += m->M_002 * m->M_002;
+  power[2] += 5.000000000000000e-01 * m->M_011 * m->M_011;
+  power[2] += m->M_020 * m->M_020;
+  power[2] += 5.000000000000000e-01 * m->M_101 * m->M_101;
+  power[2] += 5.000000000000000e-01 * m->M_110 * m->M_110;
+  power[2] += m->M_200 * m->M_200;
+
+  m->power[2] = sqrt(power[2]);
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 2
+  /* 3rd order terms */
+  power[3] += m->M_003 * m->M_003;
+  power[3] += 3.333333333333333e-01 * m->M_012 * m->M_012;
+  power[3] += 3.333333333333333e-01 * m->M_021 * m->M_021;
+  power[3] += m->M_030 * m->M_030;
+  power[3] += 3.333333333333333e-01 * m->M_102 * m->M_102;
+  power[3] += 1.666666666666667e-01 * m->M_111 * m->M_111;
+  power[3] += 3.333333333333333e-01 * m->M_120 * m->M_120;
+  power[3] += 3.333333333333333e-01 * m->M_201 * m->M_201;
+  power[3] += 3.333333333333333e-01 * m->M_210 * m->M_210;
+  power[3] += m->M_300 * m->M_300;
+
+  m->power[3] = sqrt(power[3]);
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 3
+  /* 4th order terms */
+  power[4] += m->M_004 * m->M_004;
+  power[4] += 2.500000000000000e-01 * m->M_013 * m->M_013;
+  power[4] += 1.666666666666667e-01 * m->M_022 * m->M_022;
+  power[4] += 2.500000000000000e-01 * m->M_031 * m->M_031;
+  power[4] += m->M_040 * m->M_040;
+  power[4] += 2.500000000000000e-01 * m->M_103 * m->M_103;
+  power[4] += 8.333333333333333e-02 * m->M_112 * m->M_112;
+  power[4] += 8.333333333333333e-02 * m->M_121 * m->M_121;
+  power[4] += 2.500000000000000e-01 * m->M_130 * m->M_130;
+  power[4] += 1.666666666666667e-01 * m->M_202 * m->M_202;
+  power[4] += 8.333333333333333e-02 * m->M_211 * m->M_211;
+  power[4] += 1.666666666666667e-01 * m->M_220 * m->M_220;
+  power[4] += 2.500000000000000e-01 * m->M_301 * m->M_301;
+  power[4] += 2.500000000000000e-01 * m->M_310 * m->M_310;
+  power[4] += m->M_400 * m->M_400;
+
+  m->power[4] = sqrt(power[4]);
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 4
+  /* 5th order terms */
+  power[5] += m->M_005 * m->M_005;
+  power[5] += 2.000000000000000e-01 * m->M_014 * m->M_014;
+  power[5] += 1.000000000000000e-01 * m->M_023 * m->M_023;
+  power[5] += 1.000000000000000e-01 * m->M_032 * m->M_032;
+  power[5] += 2.000000000000000e-01 * m->M_041 * m->M_041;
+  power[5] += m->M_050 * m->M_050;
+  power[5] += 2.000000000000000e-01 * m->M_104 * m->M_104;
+  power[5] += 5.000000000000000e-02 * m->M_113 * m->M_113;
+  power[5] += 3.333333333333333e-02 * m->M_122 * m->M_122;
+  power[5] += 5.000000000000000e-02 * m->M_131 * m->M_131;
+  power[5] += 2.000000000000000e-01 * m->M_140 * m->M_140;
+  power[5] += 1.000000000000000e-01 * m->M_203 * m->M_203;
+  power[5] += 3.333333333333333e-02 * m->M_212 * m->M_212;
+  power[5] += 3.333333333333333e-02 * m->M_221 * m->M_221;
+  power[5] += 1.000000000000000e-01 * m->M_230 * m->M_230;
+  power[5] += 1.000000000000000e-01 * m->M_302 * m->M_302;
+  power[5] += 5.000000000000000e-02 * m->M_311 * m->M_311;
+  power[5] += 1.000000000000000e-01 * m->M_320 * m->M_320;
+  power[5] += 2.000000000000000e-01 * m->M_401 * m->M_401;
+  power[5] += 2.000000000000000e-01 * m->M_410 * m->M_410;
+  power[5] += m->M_500 * m->M_500;
+
+  m->power[5] = sqrt(power[5]);
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 5
+#error "Missing implementation for order >5"
+#endif
 }
 
 /**
@@ -1053,12 +980,13 @@ INLINE static int gravity_multipole_equal(const struct gravity_tensors *ga,
  * @param gcount The number of particles.
  * @param grav_props The properties of the gravity scheme.
  */
-INLINE static void gravity_P2M(struct gravity_tensors *multi,
-                               const struct gpart *gparts, const int gcount,
-                               const struct gravity_props *const grav_props) {
+__attribute__((nonnull)) INLINE static void gravity_P2M(
+    struct gravity_tensors *multi, const struct gpart *gparts, const int gcount,
+    const struct gravity_props *const grav_props) {
 
   /* Temporary variables */
   float epsilon_max = 0.f;
+  float min_old_a_grav_norm = FLT_MAX;
   double mass = 0.0;
   double com[3] = {0.0, 0.0, 0.0};
   double vel[3] = {0.f, 0.f, 0.f};
@@ -1074,6 +1002,7 @@ INLINE static void gravity_P2M(struct gravity_tensors *multi,
 #endif
 
     epsilon_max = max(epsilon_max, epsilon);
+    min_old_a_grav_norm = min(min_old_a_grav_norm, gparts[k].old_a_grav_norm);
     mass += m;
     com[0] += gparts[k].x[0] * m;
     com[1] += gparts[k].x[1] * m;
@@ -1230,19 +1159,13 @@ INLINE static void gravity_P2M(struct gravity_tensors *multi,
 #endif
   }
 
-#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
-
-  /* We know the first-order multipole (dipole) is 0. */
-  M_100 = M_010 = M_001 = 0.f;
-#endif
-
   /* Store the data on the multipole. */
-  multi->m_pole.max_softening = epsilon_max;
-  multi->m_pole.M_000 = mass;
   multi->r_max = sqrt(r_max2);
   multi->CoM[0] = com[0];
   multi->CoM[1] = com[1];
   multi->CoM[2] = com[2];
+  multi->m_pole.max_softening = epsilon_max;
+  multi->m_pole.min_old_a_grav_norm = min_old_a_grav_norm;
   multi->m_pole.vel[0] = vel[0];
   multi->m_pole.vel[1] = vel[1];
   multi->m_pole.vel[2] = vel[2];
@@ -1252,13 +1175,14 @@ INLINE static void gravity_P2M(struct gravity_tensors *multi,
   multi->m_pole.min_delta_vel[0] = min_delta_vel[0];
   multi->m_pole.min_delta_vel[1] = min_delta_vel[1];
   multi->m_pole.min_delta_vel[2] = min_delta_vel[2];
+  multi->m_pole.M_000 = mass;
 
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 0
 
-  /* 1st order terms */
-  multi->m_pole.M_100 = M_100;
-  multi->m_pole.M_010 = M_010;
-  multi->m_pole.M_001 = M_001;
+  /* 1st order terms (all 0 since we expand around CoM) */
+  // multi->m_pole.M_100 = M_100;
+  // multi->m_pole.M_010 = M_010;
+  // multi->m_pole.M_001 = M_001;
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 1
 
@@ -1347,12 +1271,15 @@ INLINE static void gravity_P2M(struct gravity_tensors *multi,
  * @param pos_a The position to which m_b will be shifted.
  * @param pos_b The current postion of the multipole to shift.
  */
-INLINE static void gravity_M2M(struct multipole *restrict m_a,
-                               const struct multipole *restrict m_b,
-                               const double pos_a[3], const double pos_b[3]) {
+__attribute__((nonnull)) INLINE static void gravity_M2M(
+    struct multipole *restrict m_a, const struct multipole *restrict m_b,
+    const double pos_a[3], const double pos_b[3]) {
 
   /* "shift" the softening */
   m_a->max_softening = m_b->max_softening;
+
+  /* "shift" the minimal acceleration */
+  m_a->min_old_a_grav_norm = m_b->min_old_a_grav_norm;
 
   /* Shift 0th order term */
   m_a->M_000 = m_b->M_000;
@@ -1361,228 +1288,291 @@ INLINE static void gravity_M2M(struct multipole *restrict m_a,
   const double dx[3] = {pos_a[0] - pos_b[0], pos_a[1] - pos_b[1],
                         pos_a[2] - pos_b[2]};
 
-  /* Shift 1st order term */
-  m_a->M_100 = m_b->M_100 + X_100(dx) * m_b->M_000;
-  m_a->M_010 = m_b->M_010 + X_010(dx) * m_b->M_000;
-  m_a->M_001 = m_b->M_001 + X_001(dx) * m_b->M_000;
+  /* Shift 1st order term (all 0 (after add) since we expand around CoM) */
+  // m_a->M_100 = m_b->M_100 + X_100(dx) * m_b->M_000;
+  // m_a->M_010 = m_b->M_010 + X_010(dx) * m_b->M_000;
+  // m_a->M_001 = m_b->M_001 + X_001(dx) * m_b->M_000;
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 1
 
-  /* Shift 2nd order term */
-  m_a->M_200 = m_b->M_200 + X_100(dx) * m_b->M_100 + X_200(dx) * m_b->M_000;
-  m_a->M_020 = m_b->M_020 + X_010(dx) * m_b->M_010 + X_020(dx) * m_b->M_000;
-  m_a->M_002 = m_b->M_002 + X_001(dx) * m_b->M_001 + X_002(dx) * m_b->M_000;
-  m_a->M_110 = m_b->M_110 + X_100(dx) * m_b->M_010 + X_010(dx) * m_b->M_100 +
-               X_110(dx) * m_b->M_000;
-  m_a->M_101 = m_b->M_101 + X_100(dx) * m_b->M_001 + X_001(dx) * m_b->M_100 +
-               X_101(dx) * m_b->M_000;
-  m_a->M_011 = m_b->M_011 + X_010(dx) * m_b->M_001 + X_001(dx) * m_b->M_010 +
-               X_011(dx) * m_b->M_000;
+  /* Shift 2nd order terms (1st order mpole (all 0) commented out) */
+  m_a->M_002 =
+      m_b->M_002 /* + X_001(dx) * m_b->M_001 */ + X_002(dx) * m_b->M_000;
+  m_a->M_011 =
+      m_b->M_011 /* + X_001(dx) * m_b->M_010 */ /* + X_010(dx) * m_b->M_001 */ +
+      X_011(dx) * m_b->M_000;
+  m_a->M_020 =
+      m_b->M_020 /* + X_010(dx) * m_b->M_010 */ + X_020(dx) * m_b->M_000;
+  m_a->M_101 =
+      m_b->M_101 /* + X_001(dx) * m_b->M_100 */ /* + X_100(dx) * m_b->M_001 */ +
+      X_101(dx) * m_b->M_000;
+  m_a->M_110 =
+      m_b->M_110 /* + X_010(dx) * m_b->M_100 */ /* + X_100(dx) * m_b->M_010 */ +
+      X_110(dx) * m_b->M_000;
+  m_a->M_200 =
+      m_b->M_200 /* + X_100(dx) * m_b->M_100 */ + X_200(dx) * m_b->M_000;
 #endif
+
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 2
 
-  /* Shift 3rd order term */
-  m_a->M_300 = m_b->M_300 + X_100(dx) * m_b->M_200 + X_200(dx) * m_b->M_100 +
-               X_300(dx) * m_b->M_000;
-  m_a->M_030 = m_b->M_030 + X_010(dx) * m_b->M_020 + X_020(dx) * m_b->M_010 +
-               X_030(dx) * m_b->M_000;
-  m_a->M_003 = m_b->M_003 + X_001(dx) * m_b->M_002 + X_002(dx) * m_b->M_001 +
+  /* Shift 3rd order terms (1st order mpole (all 0) commented out) */
+  m_a->M_003 = m_b->M_003 +
+               X_001(dx) * m_b->M_002 /* + X_002(dx) * m_b->M_001 */ +
                X_003(dx) * m_b->M_000;
-  m_a->M_210 = m_b->M_210 + X_100(dx) * m_b->M_110 + X_010(dx) * m_b->M_200 +
-               X_200(dx) * m_b->M_010 + X_110(dx) * m_b->M_100 +
-               X_210(dx) * m_b->M_000;
-  m_a->M_201 = m_b->M_201 + X_100(dx) * m_b->M_101 + X_001(dx) * m_b->M_200 +
-               X_200(dx) * m_b->M_001 + X_101(dx) * m_b->M_100 +
-               X_201(dx) * m_b->M_000;
-  m_a->M_120 = m_b->M_120 + X_010(dx) * m_b->M_110 + X_100(dx) * m_b->M_020 +
-               X_020(dx) * m_b->M_100 + X_110(dx) * m_b->M_010 +
-               X_120(dx) * m_b->M_000;
-  m_a->M_021 = m_b->M_021 + X_010(dx) * m_b->M_011 + X_001(dx) * m_b->M_020 +
-               X_020(dx) * m_b->M_001 + X_011(dx) * m_b->M_010 +
-               X_021(dx) * m_b->M_000;
-  m_a->M_102 = m_b->M_102 + X_001(dx) * m_b->M_101 + X_100(dx) * m_b->M_002 +
-               X_002(dx) * m_b->M_100 + X_101(dx) * m_b->M_001 +
-               X_102(dx) * m_b->M_000;
-  m_a->M_012 = m_b->M_012 + X_001(dx) * m_b->M_011 + X_010(dx) * m_b->M_002 +
-               X_002(dx) * m_b->M_010 + X_011(dx) * m_b->M_001 +
+  m_a->M_012 = m_b->M_012 +
+               X_001(dx) * m_b->M_011 /* + X_002(dx) * m_b->M_010 */ +
+               X_010(dx) * m_b->M_002 /* + X_011(dx) * m_b->M_001 */ +
                X_012(dx) * m_b->M_000;
-  m_a->M_111 = m_b->M_111 + X_100(dx) * m_b->M_011 + X_010(dx) * m_b->M_101 +
-               X_001(dx) * m_b->M_110 + X_110(dx) * m_b->M_001 +
-               X_101(dx) * m_b->M_010 + X_011(dx) * m_b->M_100 +
-               X_111(dx) * m_b->M_000;
+  m_a->M_021 = m_b->M_021 + X_001(dx) * m_b->M_020 +
+               X_010(dx) * m_b->M_011 /* + X_011(dx) * m_b->M_010 */
+                                      /* + X_020(dx) * m_b->M_001 */
+               + X_021(dx) * m_b->M_000;
+  m_a->M_030 = m_b->M_030 +
+               X_010(dx) * m_b->M_020 /* + X_020(dx) * m_b->M_010 */ +
+               X_030(dx) * m_b->M_000;
+  m_a->M_102 = m_b->M_102 +
+               X_001(dx) * m_b->M_101 /* + X_002(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_002 /* + X_101(dx) * m_b->M_001 */ +
+               X_102(dx) * m_b->M_000;
+  m_a->M_111 = m_b->M_111 + X_001(dx) * m_b->M_110 +
+               X_010(dx) * m_b->M_101 /* + X_011(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_011 /* + X_101(dx) * m_b->M_010 */
+                                      /* + X_110(dx) * m_b->M_001 */
+               + X_111(dx) * m_b->M_000;
+  m_a->M_120 = m_b->M_120 +
+               X_010(dx) * m_b->M_110 /* + X_020(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_020 /* + X_110(dx) * m_b->M_010 */ +
+               X_120(dx) * m_b->M_000;
+  m_a->M_201 = m_b->M_201 + X_001(dx) * m_b->M_200 +
+               X_100(dx) * m_b->M_101 /* + X_101(dx) * m_b->M_100 */
+                                      /* + X_200(dx) * m_b->M_001 */
+               + X_201(dx) * m_b->M_000;
+  m_a->M_210 = m_b->M_210 + X_010(dx) * m_b->M_200 +
+               X_100(dx) * m_b->M_110 /* + X_110(dx) * m_b->M_100 */
+                                      /* + X_200(dx) * m_b->M_010 */
+               + X_210(dx) * m_b->M_000;
+  m_a->M_300 = m_b->M_300 +
+               X_100(dx) * m_b->M_200 /* + X_200(dx) * m_b->M_100 */ +
+               X_300(dx) * m_b->M_000;
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 3
-  /* Shift 4th order terms */
-  m_a->M_004 = m_b->M_004 + X_001(dx) * m_b->M_003 + X_002(dx) * m_b->M_002 +
-               X_003(dx) * m_b->M_001 + X_004(dx) * m_b->M_000;
-  m_a->M_013 = m_b->M_013 + X_001(dx) * m_b->M_012 + X_002(dx) * m_b->M_011 +
-               X_003(dx) * m_b->M_010 + X_010(dx) * m_b->M_003 +
-               X_011(dx) * m_b->M_002 + X_012(dx) * m_b->M_001 +
+
+  /* Shift 4th order terms (1st order mpole (all 0) commented out) */
+  m_a->M_004 = m_b->M_004 + X_001(dx) * m_b->M_003 +
+               X_002(dx) * m_b->M_002 /* + X_003(dx) * m_b->M_001 */ +
+               X_004(dx) * m_b->M_000;
+  m_a->M_013 = m_b->M_013 + X_001(dx) * m_b->M_012 +
+               X_002(dx) * m_b->M_011 /* + X_003(dx) * m_b->M_010 */ +
+               X_010(dx) * m_b->M_003 +
+               X_011(dx) * m_b->M_002 /* + X_012(dx) * m_b->M_001 */ +
                X_013(dx) * m_b->M_000;
   m_a->M_022 = m_b->M_022 + X_001(dx) * m_b->M_021 + X_002(dx) * m_b->M_020 +
-               X_010(dx) * m_b->M_012 + X_011(dx) * m_b->M_011 +
-               X_012(dx) * m_b->M_010 + X_020(dx) * m_b->M_002 +
-               X_021(dx) * m_b->M_001 + X_022(dx) * m_b->M_000;
+               X_010(dx) * m_b->M_012 +
+               X_011(dx) * m_b->M_011 /* + X_012(dx) * m_b->M_010 */ +
+               X_020(dx) * m_b->M_002 /* + X_021(dx) * m_b->M_001 */ +
+               X_022(dx) * m_b->M_000;
   m_a->M_031 = m_b->M_031 + X_001(dx) * m_b->M_030 + X_010(dx) * m_b->M_021 +
-               X_011(dx) * m_b->M_020 + X_020(dx) * m_b->M_011 +
-               X_021(dx) * m_b->M_010 + X_030(dx) * m_b->M_001 +
-               X_031(dx) * m_b->M_000;
-  m_a->M_040 = m_b->M_040 + X_010(dx) * m_b->M_030 + X_020(dx) * m_b->M_020 +
-               X_030(dx) * m_b->M_010 + X_040(dx) * m_b->M_000;
-  m_a->M_103 = m_b->M_103 + X_001(dx) * m_b->M_102 + X_002(dx) * m_b->M_101 +
-               X_003(dx) * m_b->M_100 + X_100(dx) * m_b->M_003 +
-               X_101(dx) * m_b->M_002 + X_102(dx) * m_b->M_001 +
+               X_011(dx) * m_b->M_020 +
+               X_020(dx) * m_b->M_011 /* + X_021(dx) * m_b->M_010 */
+                                      /* + X_030(dx) * m_b->M_001 */
+               + X_031(dx) * m_b->M_000;
+  m_a->M_040 = m_b->M_040 + X_010(dx) * m_b->M_030 +
+               X_020(dx) * m_b->M_020 /* + X_030(dx) * m_b->M_010 */ +
+               X_040(dx) * m_b->M_000;
+  m_a->M_103 = m_b->M_103 + X_001(dx) * m_b->M_102 +
+               X_002(dx) * m_b->M_101 /* + X_003(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_003 +
+               X_101(dx) * m_b->M_002 /* + X_102(dx) * m_b->M_001 */ +
                X_103(dx) * m_b->M_000;
-  m_a->M_112 =
-      m_b->M_112 + X_001(dx) * m_b->M_111 + X_002(dx) * m_b->M_110 +
-      X_010(dx) * m_b->M_102 + X_011(dx) * m_b->M_101 + X_012(dx) * m_b->M_100 +
-      X_100(dx) * m_b->M_012 + X_101(dx) * m_b->M_011 + X_102(dx) * m_b->M_010 +
-      X_110(dx) * m_b->M_002 + X_111(dx) * m_b->M_001 + X_112(dx) * m_b->M_000;
-  m_a->M_121 =
-      m_b->M_121 + X_001(dx) * m_b->M_120 + X_010(dx) * m_b->M_111 +
-      X_011(dx) * m_b->M_110 + X_020(dx) * m_b->M_101 + X_021(dx) * m_b->M_100 +
-      X_100(dx) * m_b->M_021 + X_101(dx) * m_b->M_020 + X_110(dx) * m_b->M_011 +
-      X_111(dx) * m_b->M_010 + X_120(dx) * m_b->M_001 + X_121(dx) * m_b->M_000;
-  m_a->M_130 = m_b->M_130 + X_010(dx) * m_b->M_120 + X_020(dx) * m_b->M_110 +
-               X_030(dx) * m_b->M_100 + X_100(dx) * m_b->M_030 +
-               X_110(dx) * m_b->M_020 + X_120(dx) * m_b->M_010 +
+  m_a->M_112 = m_b->M_112 + X_001(dx) * m_b->M_111 + X_002(dx) * m_b->M_110 +
+               X_010(dx) * m_b->M_102 +
+               X_011(dx) * m_b->M_101 /* + X_012(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_012 +
+               X_101(dx) * m_b->M_011 /* + X_102(dx) * m_b->M_010 */ +
+               X_110(dx) * m_b->M_002 /* + X_111(dx) * m_b->M_001 */ +
+               X_112(dx) * m_b->M_000;
+  m_a->M_121 = m_b->M_121 + X_001(dx) * m_b->M_120 + X_010(dx) * m_b->M_111 +
+               X_011(dx) * m_b->M_110 +
+               X_020(dx) * m_b->M_101 /* + X_021(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_021 + X_101(dx) * m_b->M_020 +
+               X_110(dx) * m_b->M_011 /* + X_111(dx) * m_b->M_010 */
+                                      /* + X_120(dx) * m_b->M_001 */
+               + X_121(dx) * m_b->M_000;
+  m_a->M_130 = m_b->M_130 + X_010(dx) * m_b->M_120 +
+               X_020(dx) * m_b->M_110 /* + X_030(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_030 +
+               X_110(dx) * m_b->M_020 /* + X_120(dx) * m_b->M_010 */ +
                X_130(dx) * m_b->M_000;
   m_a->M_202 = m_b->M_202 + X_001(dx) * m_b->M_201 + X_002(dx) * m_b->M_200 +
-               X_100(dx) * m_b->M_102 + X_101(dx) * m_b->M_101 +
-               X_102(dx) * m_b->M_100 + X_200(dx) * m_b->M_002 +
-               X_201(dx) * m_b->M_001 + X_202(dx) * m_b->M_000;
-  m_a->M_211 =
-      m_b->M_211 + X_001(dx) * m_b->M_210 + X_010(dx) * m_b->M_201 +
-      X_011(dx) * m_b->M_200 + X_100(dx) * m_b->M_111 + X_101(dx) * m_b->M_110 +
-      X_110(dx) * m_b->M_101 + X_111(dx) * m_b->M_100 + X_200(dx) * m_b->M_011 +
-      X_201(dx) * m_b->M_010 + X_210(dx) * m_b->M_001 + X_211(dx) * m_b->M_000;
+               X_100(dx) * m_b->M_102 +
+               X_101(dx) * m_b->M_101 /* + X_102(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_002 /* + X_201(dx) * m_b->M_001 */ +
+               X_202(dx) * m_b->M_000;
+  m_a->M_211 = m_b->M_211 + X_001(dx) * m_b->M_210 + X_010(dx) * m_b->M_201 +
+               X_011(dx) * m_b->M_200 + X_100(dx) * m_b->M_111 +
+               X_101(dx) * m_b->M_110 +
+               X_110(dx) * m_b->M_101 /* + X_111(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_011 /* + X_201(dx) * m_b->M_010 */
+                                      /* + X_210(dx) * m_b->M_001 */
+               + X_211(dx) * m_b->M_000;
   m_a->M_220 = m_b->M_220 + X_010(dx) * m_b->M_210 + X_020(dx) * m_b->M_200 +
-               X_100(dx) * m_b->M_120 + X_110(dx) * m_b->M_110 +
-               X_120(dx) * m_b->M_100 + X_200(dx) * m_b->M_020 +
-               X_210(dx) * m_b->M_010 + X_220(dx) * m_b->M_000;
+               X_100(dx) * m_b->M_120 +
+               X_110(dx) * m_b->M_110 /* + X_120(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_020 /* + X_210(dx) * m_b->M_010 */ +
+               X_220(dx) * m_b->M_000;
   m_a->M_301 = m_b->M_301 + X_001(dx) * m_b->M_300 + X_100(dx) * m_b->M_201 +
-               X_101(dx) * m_b->M_200 + X_200(dx) * m_b->M_101 +
-               X_201(dx) * m_b->M_100 + X_300(dx) * m_b->M_001 +
-               X_301(dx) * m_b->M_000;
+               X_101(dx) * m_b->M_200 +
+               X_200(dx) * m_b->M_101 /* + X_201(dx) * m_b->M_100 */
+                                      /* + X_300(dx) * m_b->M_001 */
+               + X_301(dx) * m_b->M_000;
   m_a->M_310 = m_b->M_310 + X_010(dx) * m_b->M_300 + X_100(dx) * m_b->M_210 +
-               X_110(dx) * m_b->M_200 + X_200(dx) * m_b->M_110 +
-               X_210(dx) * m_b->M_100 + X_300(dx) * m_b->M_010 +
-               X_310(dx) * m_b->M_000;
-  m_a->M_400 = m_b->M_400 + X_100(dx) * m_b->M_300 + X_200(dx) * m_b->M_200 +
-               X_300(dx) * m_b->M_100 + X_400(dx) * m_b->M_000;
+               X_110(dx) * m_b->M_200 +
+               X_200(dx) * m_b->M_110 /* + X_210(dx) * m_b->M_100 */
+                                      /* + X_300(dx) * m_b->M_010 */
+               + X_310(dx) * m_b->M_000;
+  m_a->M_400 = m_b->M_400 + X_100(dx) * m_b->M_300 +
+               X_200(dx) * m_b->M_200 /* + X_300(dx) * m_b->M_100 */ +
+               X_400(dx) * m_b->M_000;
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 4
-  /* Shift 5th order terms */
+
+  /* Shift 5th order terms (1st order mpole (all 0) commented out) */
   m_a->M_005 = m_b->M_005 + X_001(dx) * m_b->M_004 + X_002(dx) * m_b->M_003 +
-               X_003(dx) * m_b->M_002 + X_004(dx) * m_b->M_001 +
+               X_003(dx) * m_b->M_002 /* + X_004(dx) * m_b->M_001 */ +
                X_005(dx) * m_b->M_000;
   m_a->M_014 = m_b->M_014 + X_001(dx) * m_b->M_013 + X_002(dx) * m_b->M_012 +
-               X_003(dx) * m_b->M_011 + X_004(dx) * m_b->M_010 +
+               X_003(dx) * m_b->M_011 /* + X_004(dx) * m_b->M_010 */ +
                X_010(dx) * m_b->M_004 + X_011(dx) * m_b->M_003 +
-               X_012(dx) * m_b->M_002 + X_013(dx) * m_b->M_001 +
+               X_012(dx) * m_b->M_002 /* + X_013(dx) * m_b->M_001 */ +
                X_014(dx) * m_b->M_000;
-  m_a->M_023 =
-      m_b->M_023 + X_001(dx) * m_b->M_022 + X_002(dx) * m_b->M_021 +
-      X_003(dx) * m_b->M_020 + X_010(dx) * m_b->M_013 + X_011(dx) * m_b->M_012 +
-      X_012(dx) * m_b->M_011 + X_013(dx) * m_b->M_010 + X_020(dx) * m_b->M_003 +
-      X_021(dx) * m_b->M_002 + X_022(dx) * m_b->M_001 + X_023(dx) * m_b->M_000;
-  m_a->M_032 =
-      m_b->M_032 + X_001(dx) * m_b->M_031 + X_002(dx) * m_b->M_030 +
-      X_010(dx) * m_b->M_022 + X_011(dx) * m_b->M_021 + X_012(dx) * m_b->M_020 +
-      X_020(dx) * m_b->M_012 + X_021(dx) * m_b->M_011 + X_022(dx) * m_b->M_010 +
-      X_030(dx) * m_b->M_002 + X_031(dx) * m_b->M_001 + X_032(dx) * m_b->M_000;
+  m_a->M_023 = m_b->M_023 + X_001(dx) * m_b->M_022 + X_002(dx) * m_b->M_021 +
+               X_003(dx) * m_b->M_020 + X_010(dx) * m_b->M_013 +
+               X_011(dx) * m_b->M_012 +
+               X_012(dx) * m_b->M_011 /* + X_013(dx) * m_b->M_010 */ +
+               X_020(dx) * m_b->M_003 +
+               X_021(dx) * m_b->M_002 /* + X_022(dx) * m_b->M_001 */ +
+               X_023(dx) * m_b->M_000;
+  m_a->M_032 = m_b->M_032 + X_001(dx) * m_b->M_031 + X_002(dx) * m_b->M_030 +
+               X_010(dx) * m_b->M_022 + X_011(dx) * m_b->M_021 +
+               X_012(dx) * m_b->M_020 + X_020(dx) * m_b->M_012 +
+               X_021(dx) * m_b->M_011 /* + X_022(dx) * m_b->M_010 */ +
+               X_030(dx) * m_b->M_002 /* + X_031(dx) * m_b->M_001 */ +
+               X_032(dx) * m_b->M_000;
   m_a->M_041 = m_b->M_041 + X_001(dx) * m_b->M_040 + X_010(dx) * m_b->M_031 +
                X_011(dx) * m_b->M_030 + X_020(dx) * m_b->M_021 +
-               X_021(dx) * m_b->M_020 + X_030(dx) * m_b->M_011 +
-               X_031(dx) * m_b->M_010 + X_040(dx) * m_b->M_001 +
-               X_041(dx) * m_b->M_000;
+               X_021(dx) * m_b->M_020 +
+               X_030(dx) * m_b->M_011 /* + X_031(dx) * m_b->M_010 */
+                                      /* + X_040(dx) * m_b->M_001 */
+               + X_041(dx) * m_b->M_000;
   m_a->M_050 = m_b->M_050 + X_010(dx) * m_b->M_040 + X_020(dx) * m_b->M_030 +
-               X_030(dx) * m_b->M_020 + X_040(dx) * m_b->M_010 +
+               X_030(dx) * m_b->M_020 /* + X_040(dx) * m_b->M_010 */ +
                X_050(dx) * m_b->M_000;
   m_a->M_104 = m_b->M_104 + X_001(dx) * m_b->M_103 + X_002(dx) * m_b->M_102 +
-               X_003(dx) * m_b->M_101 + X_004(dx) * m_b->M_100 +
+               X_003(dx) * m_b->M_101 /* + X_004(dx) * m_b->M_100 */ +
                X_100(dx) * m_b->M_004 + X_101(dx) * m_b->M_003 +
-               X_102(dx) * m_b->M_002 + X_103(dx) * m_b->M_001 +
+               X_102(dx) * m_b->M_002 /* + X_103(dx) * m_b->M_001 */ +
                X_104(dx) * m_b->M_000;
-  m_a->M_113 =
-      m_b->M_113 + X_001(dx) * m_b->M_112 + X_002(dx) * m_b->M_111 +
-      X_003(dx) * m_b->M_110 + X_010(dx) * m_b->M_103 + X_011(dx) * m_b->M_102 +
-      X_012(dx) * m_b->M_101 + X_013(dx) * m_b->M_100 + X_100(dx) * m_b->M_013 +
-      X_101(dx) * m_b->M_012 + X_102(dx) * m_b->M_011 + X_103(dx) * m_b->M_010 +
-      X_110(dx) * m_b->M_003 + X_111(dx) * m_b->M_002 + X_112(dx) * m_b->M_001 +
-      X_113(dx) * m_b->M_000;
-  m_a->M_122 =
-      m_b->M_122 + X_001(dx) * m_b->M_121 + X_002(dx) * m_b->M_120 +
-      X_010(dx) * m_b->M_112 + X_011(dx) * m_b->M_111 + X_012(dx) * m_b->M_110 +
-      X_020(dx) * m_b->M_102 + X_021(dx) * m_b->M_101 + X_022(dx) * m_b->M_100 +
-      X_100(dx) * m_b->M_022 + X_101(dx) * m_b->M_021 + X_102(dx) * m_b->M_020 +
-      X_110(dx) * m_b->M_012 + X_111(dx) * m_b->M_011 + X_112(dx) * m_b->M_010 +
-      X_120(dx) * m_b->M_002 + X_121(dx) * m_b->M_001 + X_122(dx) * m_b->M_000;
-  m_a->M_131 =
-      m_b->M_131 + X_001(dx) * m_b->M_130 + X_010(dx) * m_b->M_121 +
-      X_011(dx) * m_b->M_120 + X_020(dx) * m_b->M_111 + X_021(dx) * m_b->M_110 +
-      X_030(dx) * m_b->M_101 + X_031(dx) * m_b->M_100 + X_100(dx) * m_b->M_031 +
-      X_101(dx) * m_b->M_030 + X_110(dx) * m_b->M_021 + X_111(dx) * m_b->M_020 +
-      X_120(dx) * m_b->M_011 + X_121(dx) * m_b->M_010 + X_130(dx) * m_b->M_001 +
-      X_131(dx) * m_b->M_000;
+  m_a->M_113 = m_b->M_113 + X_001(dx) * m_b->M_112 + X_002(dx) * m_b->M_111 +
+               X_003(dx) * m_b->M_110 + X_010(dx) * m_b->M_103 +
+               X_011(dx) * m_b->M_102 +
+               X_012(dx) * m_b->M_101 /* + X_013(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_013 + X_101(dx) * m_b->M_012 +
+               X_102(dx) * m_b->M_011 /* + X_103(dx) * m_b->M_010 */ +
+               X_110(dx) * m_b->M_003 +
+               X_111(dx) * m_b->M_002 /* + X_112(dx) * m_b->M_001 */ +
+               X_113(dx) * m_b->M_000;
+  m_a->M_122 = m_b->M_122 + X_001(dx) * m_b->M_121 + X_002(dx) * m_b->M_120 +
+               X_010(dx) * m_b->M_112 + X_011(dx) * m_b->M_111 +
+               X_012(dx) * m_b->M_110 + X_020(dx) * m_b->M_102 +
+               X_021(dx) * m_b->M_101 /* + X_022(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_022 + X_101(dx) * m_b->M_021 +
+               X_102(dx) * m_b->M_020 + X_110(dx) * m_b->M_012 +
+               X_111(dx) * m_b->M_011 /* + X_112(dx) * m_b->M_010 */ +
+               X_120(dx) * m_b->M_002 /* + X_121(dx) * m_b->M_001 */ +
+               X_122(dx) * m_b->M_000;
+  m_a->M_131 = m_b->M_131 + X_001(dx) * m_b->M_130 + X_010(dx) * m_b->M_121 +
+               X_011(dx) * m_b->M_120 + X_020(dx) * m_b->M_111 +
+               X_021(dx) * m_b->M_110 +
+               X_030(dx) * m_b->M_101 /* + X_031(dx) * m_b->M_100 */ +
+               X_100(dx) * m_b->M_031 + X_101(dx) * m_b->M_030 +
+               X_110(dx) * m_b->M_021 + X_111(dx) * m_b->M_020 +
+               X_120(dx) * m_b->M_011 /* + X_121(dx) * m_b->M_010 */
+                                      /* + X_130(dx) * m_b->M_001 */
+               + X_131(dx) * m_b->M_000;
   m_a->M_140 = m_b->M_140 + X_010(dx) * m_b->M_130 + X_020(dx) * m_b->M_120 +
-               X_030(dx) * m_b->M_110 + X_040(dx) * m_b->M_100 +
+               X_030(dx) * m_b->M_110 /* + X_040(dx) * m_b->M_100 */ +
                X_100(dx) * m_b->M_040 + X_110(dx) * m_b->M_030 +
-               X_120(dx) * m_b->M_020 + X_130(dx) * m_b->M_010 +
+               X_120(dx) * m_b->M_020 /* + X_130(dx) * m_b->M_010 */ +
                X_140(dx) * m_b->M_000;
-  m_a->M_203 =
-      m_b->M_203 + X_001(dx) * m_b->M_202 + X_002(dx) * m_b->M_201 +
-      X_003(dx) * m_b->M_200 + X_100(dx) * m_b->M_103 + X_101(dx) * m_b->M_102 +
-      X_102(dx) * m_b->M_101 + X_103(dx) * m_b->M_100 + X_200(dx) * m_b->M_003 +
-      X_201(dx) * m_b->M_002 + X_202(dx) * m_b->M_001 + X_203(dx) * m_b->M_000;
-  m_a->M_212 =
-      m_b->M_212 + X_001(dx) * m_b->M_211 + X_002(dx) * m_b->M_210 +
-      X_010(dx) * m_b->M_202 + X_011(dx) * m_b->M_201 + X_012(dx) * m_b->M_200 +
-      X_100(dx) * m_b->M_112 + X_101(dx) * m_b->M_111 + X_102(dx) * m_b->M_110 +
-      X_110(dx) * m_b->M_102 + X_111(dx) * m_b->M_101 + X_112(dx) * m_b->M_100 +
-      X_200(dx) * m_b->M_012 + X_201(dx) * m_b->M_011 + X_202(dx) * m_b->M_010 +
-      X_210(dx) * m_b->M_002 + X_211(dx) * m_b->M_001 + X_212(dx) * m_b->M_000;
-  m_a->M_221 =
-      m_b->M_221 + X_001(dx) * m_b->M_220 + X_010(dx) * m_b->M_211 +
-      X_011(dx) * m_b->M_210 + X_020(dx) * m_b->M_201 + X_021(dx) * m_b->M_200 +
-      X_100(dx) * m_b->M_121 + X_101(dx) * m_b->M_120 + X_110(dx) * m_b->M_111 +
-      X_111(dx) * m_b->M_110 + X_120(dx) * m_b->M_101 + X_121(dx) * m_b->M_100 +
-      X_200(dx) * m_b->M_021 + X_201(dx) * m_b->M_020 + X_210(dx) * m_b->M_011 +
-      X_211(dx) * m_b->M_010 + X_220(dx) * m_b->M_001 + X_221(dx) * m_b->M_000;
-  m_a->M_230 =
-      m_b->M_230 + X_010(dx) * m_b->M_220 + X_020(dx) * m_b->M_210 +
-      X_030(dx) * m_b->M_200 + X_100(dx) * m_b->M_130 + X_110(dx) * m_b->M_120 +
-      X_120(dx) * m_b->M_110 + X_130(dx) * m_b->M_100 + X_200(dx) * m_b->M_030 +
-      X_210(dx) * m_b->M_020 + X_220(dx) * m_b->M_010 + X_230(dx) * m_b->M_000;
-  m_a->M_302 =
-      m_b->M_302 + X_001(dx) * m_b->M_301 + X_002(dx) * m_b->M_300 +
-      X_100(dx) * m_b->M_202 + X_101(dx) * m_b->M_201 + X_102(dx) * m_b->M_200 +
-      X_200(dx) * m_b->M_102 + X_201(dx) * m_b->M_101 + X_202(dx) * m_b->M_100 +
-      X_300(dx) * m_b->M_002 + X_301(dx) * m_b->M_001 + X_302(dx) * m_b->M_000;
-  m_a->M_311 =
-      m_b->M_311 + X_001(dx) * m_b->M_310 + X_010(dx) * m_b->M_301 +
-      X_011(dx) * m_b->M_300 + X_100(dx) * m_b->M_211 + X_101(dx) * m_b->M_210 +
-      X_110(dx) * m_b->M_201 + X_111(dx) * m_b->M_200 + X_200(dx) * m_b->M_111 +
-      X_201(dx) * m_b->M_110 + X_210(dx) * m_b->M_101 + X_211(dx) * m_b->M_100 +
-      X_300(dx) * m_b->M_011 + X_301(dx) * m_b->M_010 + X_310(dx) * m_b->M_001 +
-      X_311(dx) * m_b->M_000;
-  m_a->M_320 =
-      m_b->M_320 + X_010(dx) * m_b->M_310 + X_020(dx) * m_b->M_300 +
-      X_100(dx) * m_b->M_220 + X_110(dx) * m_b->M_210 + X_120(dx) * m_b->M_200 +
-      X_200(dx) * m_b->M_120 + X_210(dx) * m_b->M_110 + X_220(dx) * m_b->M_100 +
-      X_300(dx) * m_b->M_020 + X_310(dx) * m_b->M_010 + X_320(dx) * m_b->M_000;
+  m_a->M_203 = m_b->M_203 + X_001(dx) * m_b->M_202 + X_002(dx) * m_b->M_201 +
+               X_003(dx) * m_b->M_200 + X_100(dx) * m_b->M_103 +
+               X_101(dx) * m_b->M_102 +
+               X_102(dx) * m_b->M_101 /* + X_103(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_003 +
+               X_201(dx) * m_b->M_002 /* + X_202(dx) * m_b->M_001 */ +
+               X_203(dx) * m_b->M_000;
+  m_a->M_212 = m_b->M_212 + X_001(dx) * m_b->M_211 + X_002(dx) * m_b->M_210 +
+               X_010(dx) * m_b->M_202 + X_011(dx) * m_b->M_201 +
+               X_012(dx) * m_b->M_200 + X_100(dx) * m_b->M_112 +
+               X_101(dx) * m_b->M_111 + X_102(dx) * m_b->M_110 +
+               X_110(dx) * m_b->M_102 +
+               X_111(dx) * m_b->M_101 /* + X_112(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_012 +
+               X_201(dx) * m_b->M_011 /* + X_202(dx) * m_b->M_010 */ +
+               X_210(dx) * m_b->M_002 /* + X_211(dx) * m_b->M_001 */ +
+               X_212(dx) * m_b->M_000;
+  m_a->M_221 = m_b->M_221 + X_001(dx) * m_b->M_220 + X_010(dx) * m_b->M_211 +
+               X_011(dx) * m_b->M_210 + X_020(dx) * m_b->M_201 +
+               X_021(dx) * m_b->M_200 + X_100(dx) * m_b->M_121 +
+               X_101(dx) * m_b->M_120 + X_110(dx) * m_b->M_111 +
+               X_111(dx) * m_b->M_110 +
+               X_120(dx) * m_b->M_101 /* + X_121(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_021 + X_201(dx) * m_b->M_020 +
+               X_210(dx) * m_b->M_011 /* + X_211(dx) * m_b->M_010 */
+                                      /* + X_220(dx) * m_b->M_001 */
+               + X_221(dx) * m_b->M_000;
+  m_a->M_230 = m_b->M_230 + X_010(dx) * m_b->M_220 + X_020(dx) * m_b->M_210 +
+               X_030(dx) * m_b->M_200 + X_100(dx) * m_b->M_130 +
+               X_110(dx) * m_b->M_120 +
+               X_120(dx) * m_b->M_110 /* + X_130(dx) * m_b->M_100 */ +
+               X_200(dx) * m_b->M_030 +
+               X_210(dx) * m_b->M_020 /* + X_220(dx) * m_b->M_010 */ +
+               X_230(dx) * m_b->M_000;
+  m_a->M_302 = m_b->M_302 + X_001(dx) * m_b->M_301 + X_002(dx) * m_b->M_300 +
+               X_100(dx) * m_b->M_202 + X_101(dx) * m_b->M_201 +
+               X_102(dx) * m_b->M_200 + X_200(dx) * m_b->M_102 +
+               X_201(dx) * m_b->M_101 /* + X_202(dx) * m_b->M_100 */ +
+               X_300(dx) * m_b->M_002 /* + X_301(dx) * m_b->M_001 */ +
+               X_302(dx) * m_b->M_000;
+  m_a->M_311 = m_b->M_311 + X_001(dx) * m_b->M_310 + X_010(dx) * m_b->M_301 +
+               X_011(dx) * m_b->M_300 + X_100(dx) * m_b->M_211 +
+               X_101(dx) * m_b->M_210 + X_110(dx) * m_b->M_201 +
+               X_111(dx) * m_b->M_200 + X_200(dx) * m_b->M_111 +
+               X_201(dx) * m_b->M_110 +
+               X_210(dx) * m_b->M_101 /* + X_211(dx) * m_b->M_100 */ +
+               X_300(dx) * m_b->M_011 /* + X_301(dx) * m_b->M_010 */
+                                      /* + X_310(dx) * m_b->M_001 */
+               + X_311(dx) * m_b->M_000;
+  m_a->M_320 = m_b->M_320 + X_010(dx) * m_b->M_310 + X_020(dx) * m_b->M_300 +
+               X_100(dx) * m_b->M_220 + X_110(dx) * m_b->M_210 +
+               X_120(dx) * m_b->M_200 + X_200(dx) * m_b->M_120 +
+               X_210(dx) * m_b->M_110 /* + X_220(dx) * m_b->M_100 */ +
+               X_300(dx) * m_b->M_020 /* + X_310(dx) * m_b->M_010 */ +
+               X_320(dx) * m_b->M_000;
   m_a->M_401 = m_b->M_401 + X_001(dx) * m_b->M_400 + X_100(dx) * m_b->M_301 +
                X_101(dx) * m_b->M_300 + X_200(dx) * m_b->M_201 +
-               X_201(dx) * m_b->M_200 + X_300(dx) * m_b->M_101 +
-               X_301(dx) * m_b->M_100 + X_400(dx) * m_b->M_001 +
-               X_401(dx) * m_b->M_000;
+               X_201(dx) * m_b->M_200 +
+               X_300(dx) * m_b->M_101 /* + X_301(dx) * m_b->M_100 */
+                                      /* + X_400(dx) * m_b->M_001 */
+               + X_401(dx) * m_b->M_000;
   m_a->M_410 = m_b->M_410 + X_010(dx) * m_b->M_400 + X_100(dx) * m_b->M_310 +
                X_110(dx) * m_b->M_300 + X_200(dx) * m_b->M_210 +
-               X_210(dx) * m_b->M_200 + X_300(dx) * m_b->M_110 +
-               X_310(dx) * m_b->M_100 + X_400(dx) * m_b->M_010 +
-               X_410(dx) * m_b->M_000;
+               X_210(dx) * m_b->M_200 +
+               X_300(dx) * m_b->M_110 /* + X_310(dx) * m_b->M_100 */
+                                      /* + X_400(dx) * m_b->M_010 */
+               + X_410(dx) * m_b->M_000;
   m_a->M_500 = m_b->M_500 + X_100(dx) * m_b->M_400 + X_200(dx) * m_b->M_300 +
-               X_300(dx) * m_b->M_200 + X_400(dx) * m_b->M_100 +
+               X_300(dx) * m_b->M_200 /* + X_400(dx) * m_b->M_100 */ +
                X_500(dx) * m_b->M_000;
 #endif
 #if SELF_GRAVITY_MULTIPOLE_ORDER > 5
@@ -1603,17 +1593,24 @@ INLINE static void gravity_M2M(struct multipole *restrict m_a,
  * @param m_a The multipole creating the field.
  * @param pot The derivatives of the potential.
  */
-INLINE static void gravity_M2L_apply(
+__attribute__((nonnull)) INLINE static void gravity_M2L_apply(
     struct grav_tensor *restrict l_b, const struct multipole *restrict m_a,
     const struct potential_derivatives_M2L *pot) {
 
 #ifdef SWIFT_DEBUG_CHECKS
-  /* Count interactions */
-  l_b->num_interacted += m_a->num_gpart;
+  /* Count all interactions
+   * Note that despite being in a section of the code protected by locks,
+   * we must use atomics here as the long-range task may update this
+   * counter in a lock-free section of code. */
+  accumulate_add_ll(&l_b->num_interacted, m_a->num_gpart);
 #endif
 
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
-  l_b->num_interacted_tree += m_a->num_gpart;
+  /* Count tree interactions
+   * Note that despite being in a section of the code protected by locks,
+   * we must use atomics here as the long-range task may update this
+   * counter in a lock-free section of code. */
+  accumulate_add_ll(&l_b->num_interacted_tree, m_a->num_gpart);
 #endif
 
   /* Record that this tensor has received contributions */
@@ -2000,7 +1997,7 @@ INLINE static void gravity_M2L_apply(
  * @param dim The size of the simulation box.
  * @param rs_inv The inverse of the gravity mesh-smoothing scale.
  */
-INLINE static void gravity_M2L_nonsym(
+__attribute__((nonnull)) INLINE static void gravity_M2L_nonsym(
     struct grav_tensor *l_b, const struct multipole *m_a, const double pos_b[3],
     const double pos_a[3], const struct gravity_props *props,
     const int periodic, const double dim[3], const float rs_inv) {
@@ -2048,7 +2045,7 @@ INLINE static void gravity_M2L_nonsym(
  * @param dim The size of the simulation box.
  * @param rs_inv The inverse of the gravity mesh-smoothing scale.
  */
-INLINE static void gravity_M2L_symmetric(
+__attribute__((nonnull)) INLINE static void gravity_M2L_symmetric(
     struct grav_tensor *restrict l_a, struct grav_tensor *restrict l_b,
     const struct multipole *restrict m_a, const struct multipole *restrict m_b,
     const double pos_a[3], const double pos_b[3],
@@ -2090,6 +2087,412 @@ INLINE static void gravity_M2L_symmetric(
 }
 
 /**
+ * @brief Compute the field tensor due to a multipole and the symmetric
+ * equivalent.
+ *
+ * @param l_b The field tensor to compute.
+ * @param ga The #gpart sourcing the field.
+ * @param pos_b The position of field tensor b.
+ * @param props The #gravity_props of this calculation.
+ * @param periodic Is the calculation periodic ?
+ * @param dim The size of the simulation box.
+ * @param rs_inv The inverse of the gravity mesh-smoothing scale.
+ */
+__attribute__((nonnull)) INLINE static void gravity_P2L(
+    struct grav_tensor *l_b, const struct gpart *ga, const double pos_b[3],
+    const struct gravity_props *props, const int periodic, const double dim[3],
+    const float rs_inv) {
+
+#ifdef SWIFT_DEBUG_CHECKS
+  /* Count all interactions
+   * Note that despite being in a section of the code protected by locks,
+   * we must use atomics here as the long-range task may update this
+   * counter in a lock-free section of code. */
+  accumulate_inc_ll(&l_b->num_interacted);
+#endif
+
+#ifdef SWIFT_GRAVITY_FORCE_CHECKS
+  /* Count tree interactions
+   * Note that despite being in a section of the code protected by locks,
+   * we must use atomics here as the long-range task may update this
+   * counter in a lock-free section of code. */
+  accumulate_inc_ll(&l_b->num_interacted_tree);
+#endif
+
+  /* Record that this tensor has received contributions */
+  l_b->interacted = 1;
+
+  /* Recover some constants */
+  const float eps = gravity_get_softening(ga, props);
+  const float mass = ga->mass;
+
+  /* Compute distance vector */
+  float dx = (float)(pos_b[0] - ga->x[0]);
+  float dy = (float)(pos_b[1] - ga->x[1]);
+  float dz = (float)(pos_b[2] - ga->x[2]);
+
+  /* Apply BC */
+  if (periodic) {
+    dx = nearest(dx, dim[0]);
+    dy = nearest(dy, dim[1]);
+    dz = nearest(dz, dim[2]);
+  }
+
+  /* Compute distance */
+  const float r2 = dx * dx + dy * dy + dz * dz;
+  const float r_inv = 1. / sqrtf(r2);
+
+  /* Compute all derivatives */
+  struct potential_derivatives_M2L pot;
+  potential_derivatives_compute_M2L(dx, dy, dz, r2, r_inv, eps, periodic,
+                                    rs_inv, &pot);
+
+  /* 0th order contributions */
+  l_b->F_000 += mass * pot.D_000;
+
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
+
+  /* 1st order contributions */
+  l_b->F_001 += mass * pot.D_001;
+  l_b->F_010 += mass * pot.D_010;
+  l_b->F_100 += mass * pot.D_100;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 1
+
+  /* 2nd order contributions */
+  l_b->F_002 += mass * pot.D_002;
+  l_b->F_011 += mass * pot.D_011;
+  l_b->F_020 += mass * pot.D_020;
+  l_b->F_101 += mass * pot.D_101;
+  l_b->F_110 += mass * pot.D_110;
+  l_b->F_200 += mass * pot.D_200;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 2
+
+  /* 3rd order contributions */
+  l_b->F_003 += mass * pot.D_003;
+  l_b->F_012 += mass * pot.D_012;
+  l_b->F_021 += mass * pot.D_021;
+  l_b->F_030 += mass * pot.D_030;
+  l_b->F_102 += mass * pot.D_102;
+  l_b->F_111 += mass * pot.D_111;
+  l_b->F_120 += mass * pot.D_120;
+  l_b->F_201 += mass * pot.D_201;
+  l_b->F_210 += mass * pot.D_210;
+  l_b->F_300 += mass * pot.D_300;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 3
+
+  /* 4th order contributions */
+  l_b->F_004 += mass * pot.D_004;
+  l_b->F_013 += mass * pot.D_013;
+  l_b->F_022 += mass * pot.D_022;
+  l_b->F_031 += mass * pot.D_031;
+  l_b->F_040 += mass * pot.D_040;
+  l_b->F_103 += mass * pot.D_103;
+  l_b->F_112 += mass * pot.D_112;
+  l_b->F_121 += mass * pot.D_121;
+  l_b->F_130 += mass * pot.D_130;
+  l_b->F_202 += mass * pot.D_202;
+  l_b->F_211 += mass * pot.D_211;
+  l_b->F_220 += mass * pot.D_220;
+  l_b->F_301 += mass * pot.D_301;
+  l_b->F_310 += mass * pot.D_310;
+  l_b->F_400 += mass * pot.D_400;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 4
+
+  /* 5th order contributions */
+  l_b->F_005 += mass * pot.D_005;
+  l_b->F_014 += mass * pot.D_014;
+  l_b->F_023 += mass * pot.D_023;
+  l_b->F_032 += mass * pot.D_032;
+  l_b->F_041 += mass * pot.D_041;
+  l_b->F_050 += mass * pot.D_050;
+  l_b->F_104 += mass * pot.D_104;
+  l_b->F_113 += mass * pot.D_113;
+  l_b->F_122 += mass * pot.D_122;
+  l_b->F_131 += mass * pot.D_131;
+  l_b->F_140 += mass * pot.D_140;
+  l_b->F_203 += mass * pot.D_203;
+  l_b->F_212 += mass * pot.D_212;
+  l_b->F_221 += mass * pot.D_221;
+  l_b->F_230 += mass * pot.D_230;
+  l_b->F_302 += mass * pot.D_302;
+  l_b->F_311 += mass * pot.D_311;
+  l_b->F_320 += mass * pot.D_320;
+  l_b->F_401 += mass * pot.D_401;
+  l_b->F_410 += mass * pot.D_410;
+  l_b->F_500 += mass * pot.D_500;
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 5
+#error "Missing implementation for order >5"
+#endif
+}
+
+/**
+ * @brief Compute the reduced field tensor due to a multipole
+ *
+ * Corresponds to equation (3g) but written in the notation of
+ * appendix A.
+ *
+ * @param m The #multipole.
+ * @param r_x x-component of the distance vector to the multipole.
+ * @param r_y y-component of the distance vector to the multipole.
+ * @param r_z z-component of the distance vector to the multipole.
+ * @param r2 Square of the distance vector to the multipole.
+ * @param eps The softening length.
+ * @param periodic Is the calculation periodic ?
+ * @param rs_inv The inverse of the gravity mesh-smoothing scale.
+ * @param l (return) The #reduced_grav_tensor to compute.
+ */
+__attribute__((always_inline, nonnull)) INLINE static void gravity_M2P(
+    const struct multipole *const m, const float r_x, const float r_y,
+    const float r_z, const float r2, const float eps, const int periodic,
+    const float rs_inv, struct reduced_grav_tensor *const l) {
+
+  /* Get the inverse distance */
+  const float r_inv = 1.f / sqrtf(r2);
+
+  /* Compute the derivatives of the potential */
+  struct potential_derivatives_M2P d;
+  potential_derivatives_compute_M2P(r_x, r_y, r_z, r2, r_inv, eps, periodic,
+                                    rs_inv, &d);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (l->F_000 != 0. || l->F_100 != 0. || l->F_010 != 0. || l->F_001 != 0.)
+    error("Working on uninitialised reduced tensor!");
+#endif
+
+  const float M_000 = m->M_000;
+  const float D_000 = d.D_000;
+
+  const float D_100 = d.D_100;
+  const float D_010 = d.D_010;
+  const float D_001 = d.D_001;
+
+  /*  0th order term */
+  l->F_000 -= M_000 * D_000;
+
+  /*  1st order multipole term (addition to rank 1) */
+  l->F_100 -= M_000 * D_100;
+  l->F_010 -= M_000 * D_010;
+  l->F_001 -= M_000 * D_001;
+
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 0
+
+  /* The dipole term is zero when using the CoM */
+  /* We keep them written to maintain the logical structure. */
+
+  /* const float M_100 = 0.f; */
+  /* const float M_010 = 0.f; */
+  /* const float M_001 = 0.f; */
+
+  /* const float D_200 = d.D_200; */
+  /* const float D_020 = d.D_020; */
+  /* const float D_002 = d.D_002; */
+  /* const float D_110 = d.D_110; */
+  /* const float D_101 = d.D_101; */
+  /* const float D_011 = d.D_011; */
+
+  /*  1st order multipole term (addition to rank 0) */
+  /* l->F_000 += M_100 * D_100 + M_010 * D_010 + M_001 * D_001; */
+
+  /*  2nd order multipole term (addition to rank 1) */
+  /* l->F_100 += M_100 * D_200 + M_010 * D_110 + M_001 * D_101; */
+  /* l->F_010 += M_100 * D_110 + M_010 * D_020 + M_001 * D_011; */
+  /* l->F_001 += M_100 * D_101 + M_010 * D_011 + M_001 * D_002; */
+
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 1
+
+  /* To keep the logic these would be defined at order 1 but
+     since all the M terms are 0 we did not define them above */
+  const float D_200 = d.D_200;
+  const float D_020 = d.D_020;
+  const float D_002 = d.D_002;
+  const float D_110 = d.D_110;
+  const float D_101 = d.D_101;
+  const float D_011 = d.D_011;
+
+  const float M_200 = m->M_200;
+  const float M_020 = m->M_020;
+  const float M_002 = m->M_002;
+  const float M_110 = m->M_110;
+  const float M_101 = m->M_101;
+  const float M_011 = m->M_011;
+
+  const float D_300 = d.D_300;
+  const float D_030 = d.D_030;
+  const float D_003 = d.D_003;
+  const float D_210 = d.D_210;
+  const float D_201 = d.D_201;
+  const float D_021 = d.D_021;
+  const float D_120 = d.D_120;
+  const float D_012 = d.D_012;
+  const float D_102 = d.D_102;
+  const float D_111 = d.D_111;
+
+  /*  2nd order multipole term (addition to rank 0)*/
+  l->F_000 -= M_200 * D_200 + M_020 * D_020 + M_002 * D_002;
+  l->F_000 -= M_110 * D_110 + M_101 * D_101 + M_011 * D_011;
+
+  /*  3rd order multipole term (addition to rank 1)*/
+  l->F_100 -= M_200 * D_300 + M_020 * D_120 + M_002 * D_102;
+  l->F_100 -= M_110 * D_210 + M_101 * D_201 + M_011 * D_111;
+  l->F_010 -= M_200 * D_210 + M_020 * D_030 + M_002 * D_012;
+  l->F_010 -= M_110 * D_120 + M_101 * D_111 + M_011 * D_021;
+  l->F_001 -= M_200 * D_201 + M_020 * D_021 + M_002 * D_003;
+  l->F_001 -= M_110 * D_111 + M_101 * D_102 + M_011 * D_012;
+
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 2
+
+  const float M_300 = m->M_300;
+  const float M_030 = m->M_030;
+  const float M_003 = m->M_003;
+  const float M_210 = m->M_210;
+  const float M_201 = m->M_201;
+  const float M_021 = m->M_021;
+  const float M_120 = m->M_120;
+  const float M_012 = m->M_012;
+  const float M_102 = m->M_102;
+  const float M_111 = m->M_111;
+
+  const float D_400 = d.D_400;
+  const float D_040 = d.D_040;
+  const float D_004 = d.D_004;
+  const float D_310 = d.D_310;
+  const float D_301 = d.D_301;
+  const float D_031 = d.D_031;
+  const float D_130 = d.D_130;
+  const float D_013 = d.D_013;
+  const float D_103 = d.D_103;
+  const float D_220 = d.D_220;
+  const float D_202 = d.D_202;
+  const float D_022 = d.D_022;
+  const float D_211 = d.D_211;
+  const float D_121 = d.D_121;
+  const float D_112 = d.D_112;
+
+  /*  3rd order multipole term (addition to rank 0)*/
+  l->F_000 += M_300 * D_300 + M_030 * D_030 + M_003 * D_003;
+  l->F_000 += M_210 * D_210 + M_201 * D_201 + M_120 * D_120;
+  l->F_000 += M_021 * D_021 + M_102 * D_102 + M_012 * D_012;
+  l->F_000 += M_111 * D_111;
+
+  /* Compute 4th order field tensor terms (addition to rank 1) */
+  l->F_001 += M_003 * D_004 + M_012 * D_013 + M_021 * D_022 + M_030 * D_031 +
+              M_102 * D_103 + M_111 * D_112 + M_120 * D_121 + M_201 * D_202 +
+              M_210 * D_211 + M_300 * D_301;
+  l->F_010 += M_003 * D_013 + M_012 * D_022 + M_021 * D_031 + M_030 * D_040 +
+              M_102 * D_112 + M_111 * D_121 + M_120 * D_130 + M_201 * D_211 +
+              M_210 * D_220 + M_300 * D_310;
+  l->F_100 += M_003 * D_103 + M_012 * D_112 + M_021 * D_121 + M_030 * D_130 +
+              M_102 * D_202 + M_111 * D_211 + M_120 * D_220 + M_201 * D_301 +
+              M_210 * D_310 + M_300 * D_400;
+
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 3
+
+  const float M_400 = m->M_400;
+  const float M_040 = m->M_040;
+  const float M_004 = m->M_004;
+  const float M_310 = m->M_310;
+  const float M_301 = m->M_301;
+  const float M_031 = m->M_031;
+  const float M_130 = m->M_130;
+  const float M_013 = m->M_013;
+  const float M_103 = m->M_103;
+  const float M_220 = m->M_220;
+  const float M_202 = m->M_202;
+  const float M_022 = m->M_022;
+  const float M_211 = m->M_211;
+  const float M_121 = m->M_121;
+  const float M_112 = m->M_112;
+
+  const float D_500 = d.D_500;
+  const float D_050 = d.D_050;
+  const float D_005 = d.D_005;
+  const float D_410 = d.D_410;
+  const float D_401 = d.D_401;
+  const float D_041 = d.D_041;
+  const float D_140 = d.D_140;
+  const float D_014 = d.D_014;
+  const float D_104 = d.D_104;
+  const float D_320 = d.D_320;
+  const float D_302 = d.D_302;
+  const float D_230 = d.D_230;
+  const float D_032 = d.D_032;
+  const float D_203 = d.D_203;
+  const float D_023 = d.D_023;
+  const float D_122 = d.D_122;
+  const float D_212 = d.D_212;
+  const float D_221 = d.D_221;
+  const float D_311 = d.D_311;
+  const float D_131 = d.D_131;
+  const float D_113 = d.D_113;
+
+  /* Compute 4th order field tensor terms (addition to rank 0) */
+  l->F_000 -= M_004 * D_004 + M_013 * D_013 + M_022 * D_022 + M_031 * D_031 +
+              M_040 * D_040 + M_103 * D_103 + M_112 * D_112 + M_121 * D_121 +
+              M_130 * D_130 + M_202 * D_202 + M_211 * D_211 + M_220 * D_220 +
+              M_301 * D_301 + M_310 * D_310 + M_400 * D_400;
+
+  /* Compute 5th order field tensor terms (addition to rank 1) */
+  l->F_001 -= M_004 * D_005 + M_013 * D_014 + M_022 * D_023 + M_031 * D_032 +
+              M_040 * D_041 + M_103 * D_104 + M_112 * D_113 + M_121 * D_122 +
+              M_130 * D_131 + M_202 * D_203 + M_211 * D_212 + M_220 * D_221 +
+              M_301 * D_302 + M_310 * D_311 + M_400 * D_401;
+  l->F_010 -= M_004 * D_014 + M_013 * D_023 + M_022 * D_032 + M_031 * D_041 +
+              M_040 * D_050 + M_103 * D_113 + M_112 * D_122 + M_121 * D_131 +
+              M_130 * D_140 + M_202 * D_212 + M_211 * D_221 + M_220 * D_230 +
+              M_301 * D_311 + M_310 * D_320 + M_400 * D_410;
+  l->F_100 -= M_004 * D_104 + M_013 * D_113 + M_022 * D_122 + M_031 * D_131 +
+              M_040 * D_140 + M_103 * D_203 + M_112 * D_212 + M_121 * D_221 +
+              M_130 * D_230 + M_202 * D_302 + M_211 * D_311 + M_220 * D_320 +
+              M_301 * D_401 + M_310 * D_410 + M_400 * D_500;
+
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 4
+
+  const float M_500 = m->M_500;
+  const float M_050 = m->M_050;
+  const float M_005 = m->M_005;
+  const float M_410 = m->M_410;
+  const float M_401 = m->M_401;
+  const float M_041 = m->M_041;
+  const float M_140 = m->M_140;
+  const float M_014 = m->M_014;
+  const float M_104 = m->M_104;
+  const float M_320 = m->M_320;
+  const float M_302 = m->M_302;
+  const float M_230 = m->M_230;
+  const float M_032 = m->M_032;
+  const float M_203 = m->M_203;
+  const float M_023 = m->M_023;
+  const float M_122 = m->M_122;
+  const float M_212 = m->M_212;
+  const float M_221 = m->M_221;
+  const float M_311 = m->M_311;
+  const float M_131 = m->M_131;
+  const float M_113 = m->M_113;
+
+  /* Compute 5th order field tensor terms (addition to rank 0) */
+  l->F_000 += M_005 * D_005 + M_014 * D_014 + M_023 * D_023 + M_032 * D_032 +
+              M_041 * D_041 + M_050 * D_050 + M_104 * D_104 + M_113 * D_113 +
+              M_122 * D_122 + M_131 * D_131 + M_140 * D_140 + M_203 * D_203 +
+              M_212 * D_212 + M_221 * D_221 + M_230 * D_230 + M_302 * D_302 +
+              M_311 * D_311 + M_320 * D_320 + M_401 * D_401 + M_410 * D_410 +
+              M_500 * D_500;
+
+#endif
+#if SELF_GRAVITY_MULTIPOLE_ORDER > 5
+#error "Missing implementation for orders >5"
+#endif
+}
+
+/**
  * @brief Creates a copy of #grav_tensor shifted to a new location.
  *
  * Corresponds to equation (28e).
@@ -2099,9 +2502,9 @@ INLINE static void gravity_M2L_symmetric(
  * @param pos_a The position to which m_b will be shifted.
  * @param pos_b The current postion of the multipole to shift.
  */
-INLINE static void gravity_L2L(struct grav_tensor *restrict la,
-                               const struct grav_tensor *restrict lb,
-                               const double pos_a[3], const double pos_b[3]) {
+__attribute__((nonnull)) INLINE static void gravity_L2L(
+    struct grav_tensor *restrict la, const struct grav_tensor *restrict lb,
+    const double pos_a[3], const double pos_b[3]) {
 
   /* Initialise everything to zero */
   gravity_field_tensors_init(la, 0);
@@ -2461,18 +2864,18 @@ INLINE static void gravity_L2L(struct grav_tensor *restrict la,
  * @param loc The position of the gravity field tensor.
  * @param gp The #gpart to update.
  */
-INLINE static void gravity_L2P(const struct grav_tensor *lb,
-                               const double loc[3], struct gpart *gp) {
+__attribute__((nonnull)) INLINE static void gravity_L2P(
+    const struct grav_tensor *lb, const double loc[3], struct gpart *gp) {
 
 #ifdef SWIFT_DEBUG_CHECKS
   if (lb->num_interacted == 0) error("Interacting with empty field tensor");
 
-  gp->num_interacted += lb->num_interacted;
+  accumulate_add_ll(&gp->num_interacted, lb->num_interacted);
 #endif
 
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
-  gp->num_interacted_m2l += lb->num_interacted_tree;
-  gp->num_interacted_pm += lb->num_interacted_pm;
+  accumulate_add_ll(&gp->num_interacted_m2l, lb->num_interacted_tree);
+  accumulate_add_ll(&gp->num_interacted_pm, lb->num_interacted_pm);
 #endif
 
   /* Local accumulator */
@@ -2482,6 +2885,7 @@ INLINE static void gravity_L2P(const struct grav_tensor *lb,
   /* Distance to the multipole */
   const double dx[3] = {gp->x[0] - loc[0], gp->x[1] - loc[1],
                         gp->x[2] - loc[2]};
+
   /* 0th order contributions */
   pot -= X_000(dx) * lb->F_000;
 
@@ -2599,67 +3003,6 @@ INLINE static void gravity_L2P(const struct grav_tensor *lb,
   gp->a_grav_m2l[1] += a_grav[1];
   gp->a_grav_m2l[2] += a_grav[2];
 #endif
-}
-
-/**
- * @brief Checks whether a cell-cell interaction can be appromixated by a M-M
- * interaction using the distance and cell radius.
- *
- * We use the multipole acceptance criterion of Dehnen, 2002, JCoPh, Volume 179,
- * Issue 1, pp.27-42, equation 10.
- *
- * We also additionally check that the distance between the multipoles
- * is larger than the softening lengths (here the distance at which
- * the gravity becomes Newtonian again, not the Plummer-equivalent quantity).
- *
- * @param r_crit_a The size of the multipole A.
- * @param r_crit_b The size of the multipole B.
- * @param theta_crit2 The square of the critical opening angle.
- * @param r2 Square of the distance (periodically wrapped) between the
- * multipoles.
- * @param epsilon_a The maximal softening length of any particle in A.
- * @param epsilon_b The maximal softening length of any particle in B.
- */
-__attribute__((always_inline, const)) INLINE static int gravity_M2L_accept(
-    const double r_crit_a, const double r_crit_b, const double theta_crit2,
-    const double r2, const double epsilon_a, const double epsilon_b) {
-
-  const double size = r_crit_a + r_crit_b;
-  const double size2 = size * size;
-  const double epsilon_a2 = epsilon_a * epsilon_a;
-  const double epsilon_b2 = epsilon_b * epsilon_b;
-
-  // MATTHIEU: Make this mass-dependent ?
-
-  /* Multipole acceptance criterion (Dehnen 2002, eq.10) */
-  return (r2 * theta_crit2 > size2) && (r2 > epsilon_a2) && (r2 > epsilon_b2);
-}
-
-/**
- * @brief Checks whether a particle-cell interaction can be appromixated by a
- * M2P interaction using the distance and cell radius.
- *
- * We use the multipole acceptance criterion of Dehnen, 2002, JCoPh, Volume 179,
- * Issue 1, pp.27-42, equation 10.
- *
- * We also additionally check that the distance between the particle and the
- * multipole is larger than the softening length (here the distance at which
- * the gravity becomes Newtonian again, not the Plummer-equivalent quantity).
- *
- * @param r_max2 The square of the size of the multipole.
- * @param theta_crit2 The square of the critical opening angle.
- * @param r2 Square of the distance (periodically wrapped) between the
- * particle and the multipole.
- * @param epsilon The softening length of the particle.
- */
-__attribute__((always_inline, const)) INLINE static int gravity_M2P_accept(
-    const float r_max2, const float theta_crit2, const float r2,
-    const float epsilon) {
-
-  // MATTHIEU: Make this mass-dependent ?
-
-  /* Multipole acceptance criterion (Dehnen 2002, eq.10) */
-  return (r2 * theta_crit2 > r_max2) && (r2 > epsilon * epsilon);
 }
 
 #endif /* SWIFT_MULTIPOLE_H */

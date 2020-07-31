@@ -34,9 +34,11 @@ can be found by typing ``./swift -h``:
     -s, --hydro                       Run with hydrodynamics.
     -S, --stars                       Run with stars.
     -B, --black-holes                 Run with black holes.
+    -k, --sinks                       Run with sink particles. 
     -u, --fof                         Run Friends-of-Friends algorithm to
                                       perform black hole seeding.
     -x, --velociraptor                Run with structure finding.
+    --line-of-sight                   Run with line-of-sight outputs.
     --limiter                         Run with time-step limiter.
     --sync                            Run with time-step synchronization
                                       of particles hit by feedback events.
@@ -86,3 +88,6 @@ can be found by typing ``./swift -h``:
                                       are dumped. 
     -Y, --threadpool-dumps=<int>      Time-step frequency at which threadpool
                                       tasks are dumped.
+    --dump-tasks-threshold=<flt>      Fraction of the total step's time spent 
+                                      in a task to trigger a dump of the task plot 
+                                      on this step 

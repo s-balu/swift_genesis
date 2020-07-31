@@ -37,7 +37,7 @@
  *
  * @param p The #part to consider.
  * @param xp The #xpart to consider.
- * @param cosmo The #cosmology.
+ * @param e The #engine.
  */
 void feedback_update_part(struct part* restrict p, struct xpart* restrict xp,
                           const struct engine* restrict e) {
@@ -66,7 +66,8 @@ void feedback_update_part(struct part* restrict p, struct xpart* restrict xp,
   p->rho *= new_mass / old_mass;
 
   /* Update internal energy */
-  const float u = hydro_get_physical_internal_energy(p, xp, cosmo);
+  const float u =
+      hydro_get_physical_internal_energy(p, xp, cosmo) * old_mass / new_mass;
   const float u_new = u + xp->feedback_data.delta_u;
 
   hydro_set_physical_internal_energy(p, xp, cosmo, u_new);
@@ -86,9 +87,13 @@ void feedback_update_part(struct part* restrict p, struct xpart* restrict xp,
 }
 
 /**
- * @Brief Should we do feedback for this star?
+ * @brief Should we do feedback for this star?
  *
  * @param sp The star to consider.
+ * @param feedback_props The #feedback_props.
+ * @param with_cosmology Is the cosmology switch on?
+ * @param cosmo The #cosmology.
+ * @param time The current time.
  */
 int feedback_will_do_feedback(const struct spart* sp,
                               const struct feedback_props* feedback_props,
@@ -111,6 +116,7 @@ int feedback_is_active(const struct spart* sp, const double time,
                        const struct cosmology* cosmo,
                        const int with_cosmology) {
 
+  // TODO improve this with estimates for SNII and SNIa
   if (sp->birth_time == -1.) return 0;
 
   if (with_cosmology) {

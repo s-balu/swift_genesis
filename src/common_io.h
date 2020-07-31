@@ -21,14 +21,13 @@
 #define SWIFT_COMMON_IO_H
 
 /* Config parameters. */
-#include "../config.h"
+#include "config.h"
 
 /* Local includes. */
 #include "part_type.h"
-#include "units.h"
 
 #define FIELD_BUFFER_SIZE 64
-#define DESCRIPTION_BUFFER_SIZE 256
+#define DESCRIPTION_BUFFER_SIZE 512
 #define PARTICLE_GROUP_BUFFER_SIZE 50
 #define FILENAME_BUFFER_SIZE 150
 #define IO_BUFFER_ALIGNMENT 1024
@@ -41,9 +40,12 @@ struct velociraptor_gpart_data;
 struct spart;
 struct bpart;
 struct xpart;
+struct sink;
 struct io_props;
 struct engine;
 struct threadpool;
+struct output_options;
+struct unit_system;
 
 /**
  * @brief The different types of data used in the GADGET IC files.
@@ -65,6 +67,9 @@ enum IO_DATA_TYPE {
 };
 
 #if defined(HAVE_HDF5)
+
+/* Library header */
+#include <hdf5.h>
 
 hid_t io_hdf5_type(enum IO_DATA_TYPE type);
 
@@ -90,6 +95,10 @@ void io_write_attribute_i(hid_t grp, const char* name, int data);
 void io_write_attribute_l(hid_t grp, const char* name, long data);
 void io_write_attribute_s(hid_t grp, const char* name, const char* str);
 
+void io_write_meta_data(hid_t h_file, const struct engine* e,
+                        const struct unit_system* internal_units,
+                        const struct unit_system* snapshot_units);
+
 void io_write_code_description(hid_t h_file);
 void io_write_engine_policy(hid_t h_file, const struct engine* e);
 
@@ -97,8 +106,10 @@ void io_write_cell_offsets(hid_t h_grp, const int cdim[3], const double dim[3],
                            const double pos_dithering[3],
                            const struct cell* cells_top, const int nr_cells,
                            const double width[3], const int nodeID,
+                           const int distributed,
                            const long long global_counts[swift_type_count],
                            const long long global_offsets[swift_type_count],
+                           const int num_fields[swift_type_count],
                            const struct unit_system* internal_units,
                            const struct unit_system* snapshot_units);
 
@@ -113,7 +124,7 @@ void io_copy_temp_buffer(void* temp, const struct engine* e,
                          const struct unit_system* internal_units,
                          const struct unit_system* snapshot_units);
 
-#endif /* defined HDF5 */
+#endif /* HAVE_HDF5 */
 
 size_t io_sizeof_type(enum IO_DATA_TYPE type);
 int io_is_double_precision(enum IO_DATA_TYPE type);
@@ -124,6 +135,10 @@ void io_collect_parts_to_write(const struct part* restrict parts,
                                struct xpart* restrict xparts_written,
                                const size_t Nparts,
                                const size_t Nparts_written);
+void io_collect_sinks_to_write(const struct sink* restrict sinks,
+                               struct sink* restrict sinks_written,
+                               const size_t Nsinks,
+                               const size_t Nsinks_written);
 void io_collect_sparts_to_write(const struct spart* restrict sparts,
                                 struct spart* restrict sparts_written,
                                 const size_t Nsparts,
@@ -157,14 +172,31 @@ void io_duplicate_stars_gparts(struct threadpool* tp,
                                struct spart* const sparts,
                                struct gpart* const gparts, size_t Nstars,
                                size_t Ndm);
+void io_duplicate_sinks_gparts(struct threadpool* tp, struct sink* const sinks,
+                               struct gpart* const gparts, size_t Nsinks,
+                               size_t Ndm);
 void io_duplicate_black_holes_gparts(struct threadpool* tp,
                                      struct bpart* const bparts,
                                      struct gpart* const gparts, size_t Nstars,
                                      size_t Ndm);
 
-void io_check_output_fields(const struct swift_params* params,
-                            const long long N_total[3]);
+void io_prepare_output_fields(struct output_options* output_options,
+                              const int with_cosmology, const int with_fof,
+                              const int with_stf);
 
-void io_write_output_field_parameter(const char* filename);
+void io_write_output_field_parameter(const char* filename, int with_cosmology);
+
+void io_make_snapshot_subdir(const char* dirname);
+
+void io_get_snapshot_filename(char filename[1024], char xmf_filename[1024],
+                              const int use_time_label,
+                              const int snapshots_invoke_stf, const double time,
+                              const int stf_count, const int snap_count,
+                              const char* subdir, const char* basename);
+
+int get_ptype_fields(const int ptype, struct io_props* list,
+                     const int with_cosmology, const int with_fof,
+                     const int with_stf);
+int get_param_ptype(const char* name);
 
 #endif /* SWIFT_COMMON_IO_H */

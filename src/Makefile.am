@@ -16,7 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # Add the non-standard paths to the included library headers
-AM_CFLAGS = $(HDF5_CPPFLAGS) $(GSL_INCS) $(FFTW_INCS) $(NUMA_INCS) $(GRACKLE_INCS)
+AM_CFLAGS = $(HDF5_CPPFLAGS) $(GSL_INCS) $(FFTW_INCS) $(NUMA_INCS) $(GRACKLE_INCS) $(OPENMP_CFLAGS)
 
 # Assign a "safe" version number
 AM_LDFLAGS = $(HDF5_LDFLAGS) $(FFTW_LIBS)
@@ -33,7 +33,7 @@ MPI_FLAGS = -DWITH_MPI $(PARMETIS_INCS) $(METIS_INCS)
 
 # Build the libswiftsim library and a convenience library just for the gravity tasks
 lib_LTLIBRARIES = libswiftsim.la
-noinst_LTLIBRARIES = libgrav.la
+noinst_LTLIBRARIES = libgrav.la 
 # Build a MPI-enabled version too?
 if HAVEMPI
 lib_LTLIBRARIES += libswiftsim_mpi.la
@@ -43,22 +43,23 @@ endif
 # List required headers
 include_HEADERS = space.h runner.h queue.h task.h lock.h cell.h part.h const.h \
     engine.h swift.h serial_io.h timers.h debug.h scheduler.h proxy.h parallel_io.h \
-    common_io.h single_io.h multipole.h map.h tools.h partition.h partition_fixed_costs.h \
-    clocks.h parser.h physical_constants.h physical_constants_cgs.h potential.h version.h \
+    common_io.h single_io.h distributed_io.h map.h tools.h  partition_fixed_costs.h \
+    partition.h clocks.h parser.h physical_constants.h physical_constants_cgs.h potential.h version.h \
     hydro_properties.h riemann.h threadpool.h cooling_io.h cooling.h cooling_struct.h \
     statistics.h memswap.h cache.h runner_doiact_hydro_vec.h profiler.h entropy_floor.h \
     dump.h logger.h active.h timeline.h xmf.h gravity_properties.h gravity_derivatives.h \
     gravity_softened_derivatives.h vector_power.h collectgroup.h hydro_space.h sort_part.h \
     chemistry.h chemistry_io.h chemistry_struct.h cosmology.h restart.h space_getsid.h utilities.h \
-    mesh_gravity.h cbrt.h exp10.h velociraptor_interface.h swift_velociraptor_part.h outputlist.h \
+    mesh_gravity.h cbrt.h exp10.h velociraptor_interface.h swift_velociraptor_part.h output_list.h \
     logger_io.h tracers_io.h tracers.h tracers_struct.h star_formation_io.h fof.h fof_struct.h fof_io.h \
+    multipole.h multipole_accept.h multipole_struct.h binomial.h integer_power.h sincos.h \
     star_formation_struct.h star_formation.h star_formation_iact.h \
     star_formation_logger.h star_formation_logger_struct.h \
     pressure_floor.h pressure_floor_struct.h pressure_floor_iact.h \
     velociraptor_struct.h velociraptor_io.h random.h memuse.h mpiuse.h memuse_rnodes.h \
     black_holes.h black_holes_io.h black_holes_properties.h black_holes_struct.h \
     feedback.h feedback_struct.h feedback_properties.h task_order.h \
-	darkmatter_write_grids.h
+    space_unique_id.h line_of_sight.h darkmatter_write_grids.h
 
 # source files for EAGLE cooling
 QLA_COOLING_SOURCES =
@@ -70,6 +71,12 @@ endif
 EAGLE_COOLING_SOURCES =
 if HAVEEAGLECOOLING
 EAGLE_COOLING_SOURCES += cooling/EAGLE/cooling.c cooling/EAGLE/cooling_tables.c
+endif
+
+# source files for COLIBRE cooling
+COLIBRE_COOLING_SOURCES =
+if HAVECOLIBRECOOLING
+COLIBRE_COOLING_SOURCES += cooling/COLIBRE/cooling.c cooling/COLIBRE/cooling_tables.c
 endif
 
 # source files for EAGLE feedback
@@ -100,29 +107,30 @@ AM_SOURCES = space.c runner_main.c runner_doiact_hydro.c runner_doiact_limiter.c
     engine_marktasks.c engine_drift.c engine_unskip.c engine_collect_end_of_step.c \
     engine_redistribute.c engine_fof.c serial_io.c timers.c debug.c scheduler.c \
     proxy.c parallel_io.c units.c common_io.c single_io.c multipole.c version.c map.c \
-    kernel_hydro.c tools.c part.c partition.c clocks.c parser.c \
+    kernel_hydro.c tools.c part.c partition.c clocks.c parser.c distributed_io.c \
     physical_constants.c potential.c hydro_properties.c \
     threadpool.c cooling.c star_formation.c \
     statistics.c profiler.c dump.c logger.c \
     part_type.c xmf.c gravity_properties.c gravity.c \
     collectgroup.c hydro_space.c equation_of_state.c \
     chemistry.c cosmology.c restart.c mesh_gravity.c velociraptor_interface.c \
-    outputlist.c velociraptor_dummy.c logger_io.c memuse.c mpiuse.c memuse_rnodes.c fof.c \
-    hashmap.c pressure_floor.c \
-	darkmatter_write_grids.c \
+    output_list.c velociraptor_dummy.c logger_io.c memuse.c mpiuse.c memuse_rnodes.c fof.c \
+    hashmap.c pressure_floor.c space_unique_id.c output_options.c line_of_sight.c \
+    darkmatter_write_grids.c \
     $(QLA_COOLING_SOURCES) \
     $(EAGLE_COOLING_SOURCES) $(EAGLE_FEEDBACK_SOURCES) \
-    $(GRACKLE_COOLING_SOURCES) $(GEAR_FEEDBACK_SOURCES)
+    $(GRACKLE_COOLING_SOURCES) $(GEAR_FEEDBACK_SOURCES) \
+    $(COLIBRE_COOLING_SOURCES)
 
 # Include files for distribution, not installation.
 nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h inline.h kernel_hydro.h kernel_gravity.h \
-		 gravity_iact.h kernel_long_gravity.h vector.h cache.h \
+		 gravity_iact.h kernel_long_gravity.h vector.h accumulate.h cache.h exp.h \
 	         runner_doiact_nosort.h runner_doiact_hydro.h runner_doiact_stars.h runner_doiact_black_holes.h runner_doiact_grav.h \
                  runner_doiact_functions_hydro.h runner_doiact_functions_stars.h runner_doiact_functions_black_holes.h \
 		 runner_doiact_functions_limiter.h runner_doiact_limiter.h units.h intrinsics.h minmax.h \
                  kick.h timestep.h drift.h adiabatic_index.h io_properties.h dimension.h part_type.h periodic.h memswap.h \
                  timestep_limiter.h timestep_limiter_iact.h timestep_sync.h timestep_sync_part.h timestep_limiter_struct.h \
-                 dump.h logger.h sign.h logger_io.h hashmap.h gravity.h gravity_io.h gravity_cache.h \
+                 dump.h logger.h sign.h logger_io.h hashmap.h gravity.h gravity_io.h gravity_cache.h output_options.h \
 		 gravity/Default/gravity.h gravity/Default/gravity_iact.h gravity/Default/gravity_io.h \
 		 gravity/Default/gravity_debug.h gravity/Default/gravity_part.h  \
 		 gravity/Potential/gravity.h gravity/Potential/gravity_iact.h gravity/Potential/gravity_io.h \
@@ -209,7 +217,10 @@ nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h
 		 stars/GEAR/stars_debug.h stars/GEAR/stars_part.h \
 	         potential/none/potential.h potential/point_mass/potential.h \
                  potential/isothermal/potential.h potential/disc_patch/potential.h \
-                 potential/sine_wave/potential.h \
+                 potential/sine_wave/potential.h potential/constant/potential.h \
+		 potential/hernquist/potential.h potential/nfw/potential.h \
+		 potential/nfw_mn/potential.h potential/point_mass_softened/potential.h \
+		 potential/point_mass_ring/potential.h \
 		 star_formation/none/star_formation.h star_formation/none/star_formation_struct.h \
 		 star_formation/none/star_formation_io.h star_formation/none/star_formation_iact.h \
 		 star_formation/QLA/star_formation.h star_formation/QLA/star_formation_struct.h \
@@ -235,7 +246,10 @@ nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h
                  cooling/EAGLE/cooling_io.h cooling/EAGLE/interpolate.h cooling/EAGLE/cooling_rates.h \
 		 cooling/QLA/cooling.h cooling/QLA/cooling_struct.h cooling/QLA/cooling_tables.h \
                  cooling/QLA/cooling_io.h cooling/QLA/interpolate.h cooling/QLA/cooling_rates.h \
-                 chemistry/none/chemistry.h \
+                 cooling/COLIBRE/cooling.h cooling/COLIBRE/cooling_struct.h cooling/COLIBRE/cooling_subgrid.h \
+                 cooling/COLIBRE/cooling_io.h cooling/COLIBRE/interpolate.h cooling/COLIBRE/cooling_rates.h \
+                 cooling/COLIBRE/cooling_tables.h cooling/COLIBRE/cooling_subgrid.h \
+		 chemistry/none/chemistry.h \
 		 chemistry/none/chemistry_io.h \
 		 chemistry/none/chemistry_struct.h \
 		 chemistry/none/chemistry_iact.h \
@@ -279,7 +293,9 @@ nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h
 		 pressure_floor/GEAR/pressure_floor.h pressure_floor/none/pressure_floor.h \
 		 pressure_floor/GEAR/pressure_floor_iact.h pressure_floor/none/pressure_floor_iact.h \
 		 pressure_floor/GEAR/pressure_floor_struct.h pressure_floor/none/pressure_floor_struct.h \
-	         task_order/GEAR/task_order.h task_order/EAGLE/task_order.h task_order/default/task_order.h
+	         task_order/GEAR/task_order.h task_order/EAGLE/task_order.h task_order/default/task_order.h \
+		 sink/Default/sink.h sink/Default/sink_io.h sink/Default/sink_part.h \
+		 sink.h sink_io.h
 
 
 # Sources and special flags for the gravity library

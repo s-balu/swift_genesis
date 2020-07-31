@@ -26,12 +26,14 @@
 void select_output_engine_init(struct engine *e, struct space *s,
                                struct cosmology *cosmo,
                                struct swift_params *params,
+                               struct output_options *output,
                                struct cooling_function_data *cooling,
                                struct hydro_props *hydro_properties) {
   /* set structures */
   e->s = s;
   e->cooling_func = cooling;
   e->parameter_file = params;
+  e->output_options = output;
   e->cosmology = cosmo;
   e->policy = engine_policy_hydro;
   e->hydro_properties = hydro_properties;
@@ -83,8 +85,9 @@ int main(int argc, char *argv[]) {
   unsigned long long cpufreq = 0;
   clocks_set_cpufreq(cpufreq);
 
-  const char *base_name = "testSelectOutput";
-  size_t Ngas = 0, Ngpart = 0, Ngpart_background = 0, Nspart = 0, Nbpart = 0;
+  // const char *base_name = "testSelectOutput";
+  size_t Ngas = 0, Ngpart = 0, Ngpart_background = 0, Nspart = 0, Nbpart = 0,
+         Nsink = 0;
   int flag_entropy_ICs = -1;
   int periodic = 1;
   double dim[3];
@@ -92,12 +95,16 @@ int main(int argc, char *argv[]) {
   struct gpart *gparts = NULL;
   struct spart *sparts = NULL;
   struct bpart *bparts = NULL;
+  struct sink *sinks = NULL;
 
   /* parse parameters */
   message("Reading parameters.");
   struct swift_params param_file;
-  const char *input_file = "selectOutput.yml";
+  const char *input_file = "selectOutputParameters.yml";
   parser_read_file(input_file, &param_file);
+
+  struct output_options output_options;
+  output_options_init(&param_file, 0, &output_options);
 
   /* Default unit system */
   message("Initialization of the unit system.");
@@ -111,11 +118,12 @@ int main(int argc, char *argv[]) {
 
   /* Read data */
   message("Reading initial conditions.");
-  read_ic_single("input.hdf5", &us, dim, &parts, &gparts, &sparts, &bparts,
-                 &Ngas, &Ngpart, &Ngpart_background, &Nspart, &Nbpart,
-                 &flag_entropy_ICs,
+  read_ic_single("input.hdf5", &us, dim, &parts, &gparts, &sinks, &sparts,
+                 &bparts, &Ngas, &Ngpart, &Ngpart_background, &Nsink, &Nspart,
+                 &Nbpart, &flag_entropy_ICs,
                  /*with_hydro=*/1,
                  /*with_gravity=*/0,
+                 /*with_sink=*/0,
                  /*with_stars=*/0,
                  /*with_black_holes=*/0,
                  /*with_cosmology=*/0,
@@ -146,19 +154,21 @@ int main(int argc, char *argv[]) {
   /* pseudo initialization of the engine */
   message("Initialization of the engine.");
   struct engine e;
+  e.physical_constants = &prog_const;
+  sprintf(e.snapshot_base_name, "testSelectOutput");
   sprintf(e.run_name, "Select Output Test");
-  select_output_engine_init(&e, &s, &cosmo, &param_file, &cooling,
-                            &hydro_properties);
+  select_output_engine_init(&e, &s, &cosmo, &param_file, &output_options,
+                            &cooling, &hydro_properties);
 
   /* check output selection */
   message("Checking output parameters.");
-  long long N_total[swift_type_count] = {
-      (long long)Ngas, (long long)Ngpart, 0, 0, (long long)Nspart, 0};
-  io_check_output_fields(&param_file, N_total);
+  io_prepare_output_fields(&output_options, /*with_cosmology=*/0,
+                           /*with_fof=*/0,
+                           /*with_structure_finding=*/0);
 
   /* write output file */
   message("Writing output.");
-  write_output_single(&e, base_name, &us, &us);
+  write_output_single(&e, &us, &us);
 
   /* Clean-up */
   message("Cleaning memory.");

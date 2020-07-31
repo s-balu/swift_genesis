@@ -128,7 +128,7 @@ static int parse_quoted_strings(const char *line, char ***result) {
     word[nchar] = '\0';
     if (count <= nwords) {
       count += 1;
-      strings = (char **)realloc(strings, count * sizeof(char));
+      strings = (char **)realloc(strings, count * sizeof(char *));
     }
     strings[nwords] = (char *)malloc((strlen(word) + 1) * sizeof(char));
     strcpy(strings[nwords], trim_both(word));
@@ -570,7 +570,7 @@ static void parse_section_param(char *line, int *isFirstParam,
   static void save_param_##PREFIX(struct swift_params *params,    \
                                   const char *name, TYPE value) { \
     char str[PARSER_MAX_LINE_SIZE];                               \
-    sprintf(str, "%s: " FMT, name, value);                        \
+    sprintf(str, "%s:" FMT, name, value);                         \
     parser_set_param(params, str);                                \
     params->data[params->paramCount - 1].used = 1;                \
     params->data[params->paramCount - 1].is_default = 0;          \
@@ -750,10 +750,10 @@ void parser_get_opt_param_string(struct swift_params *params, const char *name,
       strcpy(retParam, params->data[i].value);
 
       /* Ensure same behavior if called multiple times for same parameter */
-      if (params->data[i].is_default && !strcmp(def, retParam))
+      if (params->data[i].is_default && strcmp(def, retParam) != 0)
         error(
             "Tried parsing %s again but cannot parse a parameter with "
-            "two different default value ('%s' != '%s')",
+            "two different default values ('%s' != '%s')",
             name, def, retParam);
       /* this parameter has been used */
       params->data[i].used = 1;
@@ -1269,4 +1269,25 @@ void parser_struct_dump(const struct swift_params *params, FILE *stream) {
 void parser_struct_restore(const struct swift_params *params, FILE *stream) {
   restart_read_blocks((void *)params, sizeof(struct swift_params), 1, stream,
                       NULL, "parameters");
+}
+
+/**
+ * @brief Return the index of a given section name in a swift_params struct.
+ *
+ * If the section could not be found, -1 is returned.
+ *
+ * @param params The swift_params struct in which to locate the section.
+ * @param name The section name to locate.
+ */
+int parser_get_section_id(const struct swift_params *params, const char *name) {
+
+  for (int section_id = 0; section_id < params->sectionCount; section_id++) {
+    /* Get the name of current section, *without* a trailing colon */
+    char section_name[FIELD_BUFFER_SIZE];
+    strcpy(section_name, params->section[section_id].name);
+    section_name[strlen(section_name) - 1] = 0;
+
+    if (strcmp(section_name, name) == 0) return section_id;
+  }
+  return -1;
 }
