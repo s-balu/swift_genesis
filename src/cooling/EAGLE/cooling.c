@@ -31,6 +31,7 @@
 #include <time.h>
 
 /* Local includes. */
+#include "active.h"
 #include "chemistry.h"
 #include "cooling.h"
 #include "cooling_rates.h"
@@ -581,11 +582,14 @@ __attribute__((always_inline)) INLINE void cooling_first_init_part(
  * metallicity.
  * @param XH The Hydrogen abundance of the gas.
  * @param u_phys Internal energy of the gas in internal physical units.
+ * @param HII_region Is this patch of gas an HII region? (Not implemented in
+ * EAGLE)
  */
 float cooling_get_temperature_from_gas(
     const struct phys_const *phys_const, const struct cosmology *cosmo,
     const struct cooling_function_data *cooling, const float rho_phys,
-    const float XH, const float logZZsol, const float u_phys) {
+    const float XH, const float logZZsol, const float u_phys,
+    const int HII_region) {
 
   error("Do not call this function");
   return -1.f;
@@ -659,6 +663,20 @@ float cooling_get_temperature(
   return exp10(log_10_T);
 }
 
+double compute_subgrid_property(
+    const struct cooling_function_data *cooling,
+    const struct phys_const *phys_const,
+    const struct entropy_floor_properties *floor_props,
+    const struct cosmology *cosmo, const float rho_phys, const float logZZsol,
+    const float XH, const float P_phys, const float log10_T,
+    const float log10_T_EOS_max, const int HII_region,
+    const float *abundance_ratio, const double log_u_cgs,
+    const enum cooling_subgrid_properties isub) {
+
+  error("Do not call this function");
+  return -1.f;
+}
+
 /**
  * @brief Compute the physical subgrid density of the gas.
  *
@@ -689,6 +707,34 @@ double compute_subgrid_density(
     const float log10_T_EOS_max) {
 
   return rho_phys;
+}
+
+/**
+ * @brief Returns the subgrid temperature of a particle.
+ *
+ * This model has no subgrid quantity. We return an error.
+ *
+ * @param p The particle.
+ * @param xp The extended particle data.
+ */
+float cooling_get_subgrid_temperature(const struct part *p,
+                                      const struct xpart *xp) {
+  error("This cooling model does not use subgrid quantities!");
+  return -1.f;
+}
+
+/**
+ * @brief Returns the subgrid density of a particle.
+ *
+ * This model has no subgrid quantity. We return an error.
+ *
+ * @param p The particle.
+ * @param xp The extended particle data.
+ */
+float cooling_get_subgrid_density(const struct part *p,
+                                  const struct xpart *xp) {
+  error("This cooling model does not use subgrid quantities!");
+  return -1.f;
 }
 
 /**
@@ -740,6 +786,8 @@ void cooling_Hydrogen_reionization(const struct cooling_function_data *cooling,
 
     struct part *p = &parts[i];
     struct xpart *xp = &xparts[i];
+
+    if (part_is_inhibited(p, s->e)) continue;
 
     const float old_u = hydro_get_physical_internal_energy(p, xp, cosmo);
     const float new_u = old_u + extra_heat;

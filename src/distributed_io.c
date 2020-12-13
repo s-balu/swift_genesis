@@ -54,6 +54,7 @@
 #include "output_options.h"
 #include "part.h"
 #include "part_type.h"
+#include "rt_io.h"
 #include "sink_io.h"
 #include "star_formation_io.h"
 #include "stars_io.h"
@@ -73,18 +74,19 @@
  * the HDF5 file.
  * @param props The #io_props of the field to read
  * @param N The number of particles to write.
+ * @param lossy_compression Level of lossy compression to use for this field.
  * @param internal_units The #unit_system used internally
  * @param snapshot_units The #unit_system used in the snapshots
  *
  * @todo A better version using HDF5 hyper-slabs to write the file directly from
  * the part array will be written once the structures have been stabilized.
  */
-void write_distributed_array(const struct engine* e, hid_t grp,
-                             const char* fileName,
-                             const char* partTypeGroupName,
-                             const struct io_props props, const size_t N,
-                             const struct unit_system* internal_units,
-                             const struct unit_system* snapshot_units) {
+void write_distributed_array(
+    const struct engine* e, hid_t grp, const char* fileName,
+    const char* partTypeGroupName, const struct io_props props, const size_t N,
+    const enum lossy_compression_schemes lossy_compression,
+    const struct unit_system* internal_units,
+    const struct unit_system* snapshot_units) {
 
   const size_t typeSize = io_sizeof_type(props.type);
   const size_t num_elements = N * props.dimension;
@@ -111,7 +113,7 @@ void write_distributed_array(const struct engine* e, hid_t grp,
     error("Error while creating data space for field '%s'.", props.name);
 
   /* Decide what chunk size to use based on compression */
-  int log2_chunk_size = e->snapshot_compression > 0 ? 12 : 18;
+  int log2_chunk_size = 20;
 
   int rank;
   hsize_t shape[2];
@@ -139,8 +141,11 @@ void write_distributed_array(const struct engine* e, hid_t grp,
   if (h_err < 0)
     error("Error while changing data space shape for field '%s'.", props.name);
 
+  /* Dataset type */
+  hid_t h_type = H5Tcopy(io_hdf5_type(props.type));
+
   /* Dataset properties */
-  const hid_t h_prop = H5Pcreate(H5P_DATASET_CREATE);
+  hid_t h_prop = H5Pcreate(H5P_DATASET_CREATE);
 
   /* Create filters and set compression level if we have something to write */
   if (N > 0) {
@@ -151,12 +156,12 @@ void write_distributed_array(const struct engine* e, hid_t grp,
       error("Error while setting chunk size (%llu, %llu) for field '%s'.",
             chunk_shape[0], chunk_shape[1], props.name);
 
-    /* Impose check-sum to verify data corruption */
-    h_err = H5Pset_fletcher32(h_prop);
-    if (h_err < 0)
-      error("Error while setting checksum options for field '%s'.", props.name);
+    /* Are we imposing some form of lossy compression filter? */
+    if (lossy_compression != compression_write_lossless)
+      set_hdf5_lossy_compression(&h_prop, &h_type, lossy_compression,
+                                 props.name);
 
-    /* Impose data compression */
+    /* Impose GZIP data compression */
     if (e->snapshot_compression > 0) {
       h_err = H5Pset_shuffle(h_prop);
       if (h_err < 0)
@@ -168,11 +173,16 @@ void write_distributed_array(const struct engine* e, hid_t grp,
         error("Error while setting compression options for field '%s'.",
               props.name);
     }
+
+    /* Impose check-sum to verify data corruption */
+    h_err = H5Pset_fletcher32(h_prop);
+    if (h_err < 0)
+      error("Error while setting checksum options for field '%s'.", props.name);
   }
 
   /* Create dataset */
-  const hid_t h_data = H5Dcreate(grp, props.name, io_hdf5_type(props.type),
-                                 h_space, H5P_DEFAULT, h_prop, H5P_DEFAULT);
+  const hid_t h_data = H5Dcreate(grp, props.name, h_type, h_space, H5P_DEFAULT,
+                                 h_prop, H5P_DEFAULT);
   if (h_data < 0) error("Error while creating dataspace '%s'.", props.name);
 
   /* Write temporary buffer to HDF5 dataspace */
@@ -217,6 +227,7 @@ void write_distributed_array(const struct engine* e, hid_t grp,
 
   /* Free and close everything */
   swift_free("writebuff", temp);
+  H5Tclose(h_type);
   H5Pclose(h_prop);
   H5Dclose(h_data);
   H5Sclose(h_space);
@@ -259,6 +270,7 @@ void write_output_distributed(struct engine* e,
   const int with_temperature = e->policy & engine_policy_temperature;
   const int with_fof = e->policy & engine_policy_fof;
   const int with_DM_background = e->s->with_DM_background;
+  const int with_rt = e->policy & engine_policy_rt;
 #ifdef HAVE_VELOCIRAPTOR
   const int with_stf = (e->policy & engine_policy_structure_finding) &&
                        (e->s->gpart_group_data != NULL);
@@ -383,6 +395,16 @@ void write_output_distributed(struct engine* e,
   io_write_attribute_s(h_grp, "Code", "SWIFT");
   io_write_attribute_s(h_grp, "RunName", e->run_name);
 
+  /* Write out the time-base */
+  if (with_cosmology) {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", e->time_base);
+    const double delta_t = cosmology_get_timebase(e->cosmology, e->ti_current);
+    io_write_attribute_d(h_grp, "TimeBase_dt", delta_t);
+  } else {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", 0);
+    io_write_attribute_d(h_grp, "TimeBase_dt", e->time_base);
+  }
+
   /* Store the time at which the snapshot was written */
   time_t tm = time(NULL);
   struct tm* timeinfo = localtime(&tm);
@@ -412,6 +434,8 @@ void write_output_distributed(struct engine* e,
                      numParticlesHighWord, swift_type_count);
   double MassTable[swift_type_count] = {0};
   io_write_attribute(h_grp, "MassTable", DOUBLE, MassTable, swift_type_count);
+  io_write_attribute(h_grp, "InitialMassTable", DOUBLE,
+                     e->s->initial_mean_mass_particles, swift_type_count);
   unsigned int flagEntropy[swift_type_count] = {0};
   flagEntropy[0] = writeEntropyFlag();
   io_write_attribute(h_grp, "Flag_Entropy_ICs", UINT, flagEntropy,
@@ -436,8 +460,8 @@ void write_output_distributed(struct engine* e,
   if (h_grp < 0) error("Error while creating cells group");
 
   /* Write the location of the particles in the arrays */
-  io_write_cell_offsets(h_grp, e->s->cdim, e->s->dim, e->s->pos_dithering,
-                        e->s->cells_top, e->s->nr_cells, e->s->width, mpi_rank,
+  io_write_cell_offsets(h_grp, e->s->cdim, e->s->dim, e->s->cells_top,
+                        e->s->nr_cells, e->s->width, mpi_rank,
                         /*distributed=*/1, N_total, global_offsets, numFields,
                         internal_units, snapshot_units);
   H5Gclose(h_grp);
@@ -489,7 +513,8 @@ void write_output_distributed(struct engine* e,
           /* No inhibted particles: easy case */
           Nparticles = Ngas;
           hydro_write_particles(parts, xparts, list, &num_fields);
-          num_fields += chemistry_write_particles(parts, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts, xparts, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields += cooling_write_particles(
                 parts, xparts, list + num_fields, e->cooling_func);
@@ -505,6 +530,9 @@ void write_output_distributed(struct engine* e,
               parts, xparts, list + num_fields, with_cosmology);
           num_fields +=
               star_formation_write_particles(parts, xparts, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts, list + num_fields);
+          }
 
         } else {
 
@@ -528,8 +556,8 @@ void write_output_distributed(struct engine* e,
           /* Select the fields to write */
           hydro_write_particles(parts_written, xparts_written, list,
                                 &num_fields);
-          num_fields +=
-              chemistry_write_particles(parts_written, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts_written, xparts_written, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields +=
                 cooling_write_particles(parts_written, xparts_written,
@@ -547,6 +575,9 @@ void write_output_distributed(struct engine* e,
               parts_written, xparts_written, list + num_fields, with_cosmology);
           num_fields += star_formation_write_particles(
               parts_written, xparts_written, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts_written, list + num_fields);
+          }
         }
       } break;
 
@@ -681,6 +712,9 @@ void write_output_distributed(struct engine* e,
           if (with_stf) {
             num_fields += velociraptor_write_sparts(sparts, list + num_fields);
           }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts, list + num_fields);
+          }
         } else {
 
           /* Ok, we need to fish out the particles we want */
@@ -709,6 +743,9 @@ void write_output_distributed(struct engine* e,
           if (with_stf) {
             num_fields +=
                 velociraptor_write_sparts(sparts_written, list + num_fields);
+          }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts_written, list + num_fields);
           }
         }
       } break;
@@ -763,23 +800,26 @@ void write_output_distributed(struct engine* e,
 
     /* Did the user specify a non-standard default for the entire particle
      * type? */
-    const enum compression_levels compression_level_current_default =
-        output_options_get_ptype_default(output_options->select_output,
-                                         current_selection_name,
-                                         (enum part_type)ptype);
+    const enum lossy_compression_schemes compression_level_current_default =
+        output_options_get_ptype_default_compression(
+            output_options->select_output, current_selection_name,
+            (enum part_type)ptype, e->verbose);
 
     /* Write everything that is not cancelled */
     int num_fields_written = 0;
     for (int i = 0; i < num_fields; ++i) {
 
       /* Did the user cancel this field? */
-      const int should_write = output_options_should_write_field(
-          output_options, current_selection_name, list[i].name,
-          (enum part_type)ptype, compression_level_current_default);
+      const enum lossy_compression_schemes compression_level =
+          output_options_get_field_compression(
+              output_options, current_selection_name, list[i].name,
+              (enum part_type)ptype, compression_level_current_default,
+              e->verbose);
 
-      if (should_write) {
+      if (compression_level != compression_do_not_write) {
         write_distributed_array(e, h_grp, fileName, partTypeGroupName, list[i],
-                                Nparticles, internal_units, snapshot_units);
+                                Nparticles, compression_level, internal_units,
+                                snapshot_units);
         num_fields_written++;
       }
     }

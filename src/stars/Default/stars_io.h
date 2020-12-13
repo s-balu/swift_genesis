@@ -54,9 +54,9 @@ INLINE static void convert_spart_pos(const struct engine *e,
 
   const struct space *s = e->s;
   if (s->periodic) {
-    ret[0] = box_wrap(sp->x[0] - s->pos_dithering[0], 0.0, s->dim[0]);
-    ret[1] = box_wrap(sp->x[1] - s->pos_dithering[1], 0.0, s->dim[1]);
-    ret[2] = box_wrap(sp->x[2] - s->pos_dithering[2], 0.0, s->dim[2]);
+    ret[0] = box_wrap(sp->x[0], 0.0, s->dim[0]);
+    ret[1] = box_wrap(sp->x[1], 0.0, s->dim[1]);
+    ret[2] = box_wrap(sp->x[2], 0.0, s->dim[2]);
   } else {
     ret[0] = sp->x[0];
     ret[1] = sp->x[1];
@@ -265,5 +265,4 @@ INLINE static void stars_props_struct_restore(const struct stars_props *p,
   restart_read_blocks((void *)p, sizeof(struct stars_props), 1, stream, NULL,
                       "stars props");
 }
-
 #endif /* SWIFT_DEFAULT_STAR_IO_H */

@@ -47,7 +47,7 @@ void header_print(const struct header *h) {
   message("Offset direction: %s.", logger_offset_name[h->offset_direction]);
   message("Number masks:     %i.", h->masks_count);
 
-  for (size_t i = 0; i < h->masks_count; i++) {
+  for (int i = 0; i < h->masks_count; i++) {
     message("  Mask:  %s.", h->masks[i].name);
     message("  Value: %u.", h->masks[i].mask);
     message("  Size:  %i.", h->masks[i].size);
@@ -70,7 +70,7 @@ void header_free(struct header *h) { free(h->masks); };
  * @return Index of the field (-1 if not found).
  */
 int header_get_field_index(const struct header *h, const char *field) {
-  for (size_t i = 0; i < h->masks_count; i++) {
+  for (int i = 0; i < h->masks_count; i++) {
     if (strcmp(h->masks[i].name, field) == 0) {
       return i;
     }
@@ -113,7 +113,7 @@ void header_read(struct header *h, struct logger_logfile *log) {
   char file_format[STRING_SIZE];
   map = logger_loader_io_read_data(map, LOGGER_VERSION_SIZE, &file_format);
   if (strcmp(file_format, "SWIFT_LOGGER"))
-    error("Wrong file format (%s).", file_format);
+    error_python("Wrong file format (%s).", file_format);
 
   /* Read the major version number. */
   map = logger_loader_io_read_data(map, sizeof(int), &h->major_version);
@@ -122,7 +122,7 @@ void header_read(struct header *h, struct logger_logfile *log) {
   map = logger_loader_io_read_data(map, sizeof(int), &h->minor_version);
 
   struct logger_reader *reader = log->reader;
-  if (&reader->log != log) error("Wrong link to the reader.");
+  if (&reader->log != log) error_python("Wrong link to the reader.");
 
   if (reader->verbose > 0)
     message("File version %i.%i.", h->major_version, h->minor_version);
@@ -132,7 +132,7 @@ void header_read(struct header *h, struct logger_logfile *log) {
 
   if (!header_is_forward(h) && !header_is_backward(h) &&
       !header_is_corrupted(h))
-    error("Wrong offset value in the header (%i).", h->offset_direction);
+    error_python("Wrong offset value in the header (%i).", h->offset_direction);
 
   /* Read offset to first record. */
   h->offset_first_record = 0;
@@ -146,7 +146,7 @@ void header_read(struct header *h, struct logger_logfile *log) {
 
   /* Check if value defined in this file is large enough. */
   if (STRING_SIZE < h->string_length) {
-    error("Name too large in log file %i.", h->string_length);
+    error_python("Name too large in log file %i.", h->string_length);
   }
 
   /* Read the number of masks. */
@@ -155,12 +155,12 @@ void header_read(struct header *h, struct logger_logfile *log) {
   /* Allocate the masks memory. */
   h->masks = malloc(sizeof(struct mask_data) * h->masks_count);
   if (h->masks == NULL) {
-    error("Failed to allocate the memory for the masks.");
+    error_python("Failed to allocate the memory for the masks.");
   }
 
   /* Loop over all masks. */
   h->timestamp_mask = 0;
-  for (size_t i = 0; i < h->masks_count; i++) {
+  for (int i = 0; i < h->masks_count; i++) {
     /* Read the mask name. */
     map = logger_loader_io_read_data(map, h->string_length, h->masks[i].name);
 
@@ -172,22 +172,99 @@ void header_read(struct header *h, struct logger_logfile *log) {
                                      &h->masks[i].size);
 
     /* Keep the timestamp mask in memory */
-    if (strcmp(h->masks[i].name, "timestamp") == 0) {
+    if (strcmp(h->masks[i].name, "Timestamp") == 0) {
       h->timestamp_mask = h->masks[i].mask;
     }
   }
 
   /* Check that the timestamp mask exists */
   if (h->timestamp_mask == 0) {
-    error("Unable to find the timestamp mask.");
+    error_python("Unable to find the timestamp mask.");
   }
 
   /* Check the logfile header's size. */
   if (map != (char *)log->log.map + h->offset_first_record) {
     size_t offset = (char *)map - (char *)log->log.map;
-    error("Wrong header size (in header %zi, current %zi).",
-          h->offset_first_record, offset);
+    error_python("Wrong header size (in header %zi, current %zi).",
+                 h->offset_first_record, offset);
   }
+
+  /* Set the first and second derivatives as non existent. */
+  for (int i = 0; i < h->masks_count; i++) {
+    h->masks[i].reader.first_deriv = -1;
+    h->masks[i].reader.second_deriv = -1;
+  }
+
+  /* Hydro */
+  /* Set the link between local and global */
+  for (int j = 0; j < hydro_logger_field_count; j++) {
+    hydro_logger_local_to_global[j] = -1;
+    for (int i = 0; i < h->masks_count; i++) {
+      if (strcmp(h->masks[i].name, hydro_logger_field_names[j]) == 0) {
+        hydro_logger_local_to_global[j] = i;
+        break;
+      }
+    }
+
+    /* Check if everything is fine. */
+    const int index = hydro_logger_local_to_global[j];
+    if (index == -1) {
+      error("Field %s in hydro is not set", hydro_logger_field_names[j]);
+    }
+    if (h->masks[index].size != hydro_logger_field_size[j]) {
+      error("Field %s in hydro does not have the correct size",
+            hydro_logger_field_names[j]);
+    }
+  }
+
+  hydro_logger_reader_link_derivatives(h);
+
+  /* Gravity */
+  /* Set the link between local and global */
+  for (int j = 0; j < gravity_logger_field_count; j++) {
+    gravity_logger_local_to_global[j] = -1;
+    for (int i = 0; i < h->masks_count; i++) {
+      if (strcmp(h->masks[i].name, gravity_logger_field_names[j]) == 0) {
+        gravity_logger_local_to_global[j] = i;
+        break;
+      }
+    }
+
+    /* Check if everything is fine. */
+    const int index = gravity_logger_local_to_global[j];
+    if (index == -1) {
+      error("Field %s in gravity is not set", gravity_logger_field_names[j]);
+    }
+    if (h->masks[index].size != gravity_logger_field_size[j]) {
+      error("Field %s in gravity does not have the correct size",
+            gravity_logger_field_names[j]);
+    }
+  }
+
+  gravity_logger_reader_link_derivatives(h);
+
+  /* Stars */
+  /* Set the link between local and global */
+  for (int j = 0; j < stars_logger_field_count; j++) {
+    stars_logger_local_to_global[j] = -1;
+    for (int i = 0; i < h->masks_count; i++) {
+      if (strcmp(h->masks[i].name, stars_logger_field_names[j]) == 0) {
+        stars_logger_local_to_global[j] = i;
+        break;
+      }
+    }
+
+    /* Check if everything is fine. */
+    const int index = stars_logger_local_to_global[j];
+    if (index == -1) {
+      error("Field %s in stars is not set", stars_logger_field_names[j]);
+    }
+    if (h->masks[index].size != stars_logger_field_size[j]) {
+      error("Field %s in stars does not have the correct size.",
+            stars_logger_field_names[j]);
+    }
+  }
+  stars_logger_reader_link_derivatives(h);
 };
 
 /**
@@ -202,7 +279,7 @@ size_t header_get_record_size_from_mask(const struct header *h,
                                         const size_t mask) {
   size_t count = 0;
   /* Loop over each masks. */
-  for (size_t i = 0; i < h->masks_count; i++) {
+  for (int i = 0; i < h->masks_count; i++) {
     if (mask & h->masks[i].mask) {
       count += h->masks[i].size;
     }

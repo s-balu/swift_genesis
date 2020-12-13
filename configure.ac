@@ -16,7 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # Init the project.
-AC_INIT([SWIFT],[0.8.5],[https://gitlab.cosma.dur.ac.uk/swift/swiftsim])
+AC_INIT([SWIFT],[0.9.0],[https://gitlab.cosma.dur.ac.uk/swift/swiftsim])
 swift_config_flags="$*"
 
 #  We want to stop when given unrecognised options. No subdirs so this is safe.
@@ -356,7 +356,7 @@ fi
 
 # Check if gravity force checks are on for some particles.
 AC_ARG_ENABLE([gravity-force-checks],
-   [AS_HELP_STRING([--enable-gravity-force-checks],
+   [AS_HELP_STRING([--enable-gravity-force-checks=<N>],
      [Activate expensive brute-force gravity checks for a fraction 1/N of all particles @<:@N@:>@]
    )],
    [gravity_force_checks="$enableval"],
@@ -382,7 +382,7 @@ fi
 
 # Check if we want to zero the gravity forces for all particles below some ID.
 AC_ARG_ENABLE([no-gravity-below-id],
-   [AS_HELP_STRING([--enable-no-gravity-below-id],
+   [AS_HELP_STRING([--enable-no-gravity-below-id=<N>],
      [Zeros the gravitational acceleration of all particles with an ID smaller than @<:@N@:>@]
    )],
    [no_gravity_below_id="$enableval"],
@@ -396,7 +396,7 @@ fi
 
 # Check if we want to use boundary particles.
 AC_ARG_ENABLE([boundary-particles],
-   [AS_HELP_STRING([--enable-boundary-particles],
+   [AS_HELP_STRING([--enable-boundary-particles=<N>],
      [Set all particles with an ID smaller than @<:@N@:>@ as boundary particles (i.e. receive zero gravity + hydro forces).]
    )],
    [boundary_particles="$enableval"],
@@ -407,6 +407,34 @@ if test "$boundary_particles" == "yes"; then
 elif test "$boundary_particles" != "no"; then
    AC_DEFINE_UNQUOTED([SWIFT_NO_GRAVITY_BELOW_ID], [$enableval] ,[Particles with smaller ID than this will have zero gravity forces])
    AC_DEFINE_UNQUOTED([SWIFT_BOUNDARY_PARTICLES], [$enableval] ,[Particles with smaller ID than this will be considered as boundaries.])
+fi
+
+# Check if we want to use fixed boundary particles.
+AC_ARG_ENABLE([fixed-boundary-particles],
+   [AS_HELP_STRING([--enable-fixed-boundary-particles=<N>],
+     [Set all particles with an ID smaller than @<:@N@:>@ as fixed boundary particles (i.e. receive zero gravity + hydro forces + zero velocity), this mode enables also --enable-boundary-particles and --enable-no-gravity-below-id.]
+   )],
+   [fixed_boundary_particles="$enableval"],
+   [fixed_boundary_particles="no"]
+)
+if test "$fixed_boundary_particles" == "yes"; then
+   AC_MSG_ERROR(Need to specify the ID below which particles get zero forces when using --enable-boundary-particles!)
+elif test "$fixed_boundary_particles" != "no"; then
+   AC_DEFINE_UNQUOTED([SWIFT_NO_GRAVITY_BELOW_ID], [$enableval] ,[Particles with smaller ID than this will have zero gravity forces])
+   AC_DEFINE_UNQUOTED([SWIFT_BOUNDARY_PARTICLES], [$enableval] ,[Particles with smaller ID than this will be considered as boundaries.])
+   AC_DEFINE_UNQUOTED([SWIFT_FIXED_BOUNDARY_PARTICLES], [$enableval] ,[Particles with smaller ID than this will be considered as boundaries.])
+fi
+
+# Check if fixed entropy is on for settling planetary initial conditions
+AC_ARG_ENABLE([planetary-fixed-entropy],
+   [AS_HELP_STRING([--enable-planetary-fixed-entropy],
+     [Force entropies to stay fixed for settling planetary initial conditions @<:@yes/no@:>@]
+   )],
+   [planetary_fixed_entropy="$enableval"],
+   [planetary_fixed_entropy="no"]
+)
+if test "$planetary_fixed_entropy" = "yes"; then
+   AC_DEFINE([PLANETARY_FIXED_ENTROPY],1,[Enable planetary fixed entropy])
 fi
 
 # Check whether we have any of the ARM v8.1 tick timers
@@ -1113,7 +1141,8 @@ if test "x$with_python" != "xno"; then
       # use linux default python
       with_python="/usr/"
    fi
-   AM_PATH_PYTHON([3], [], [AC_MSG_ERROR(python not found)])
+   AM_PATH_PYTHON([3], [], [AC_MSG_ERROR(python not found)])   
+   AC_ARG_VAR([PYTHON_LIBS], [Linking flags for python, bypassing python-config])
    AC_ARG_VAR([PYTHON_INCS], [Include flags for python, bypassing python-config])
    AC_ARG_VAR([PYTHON_CONFIG], [Path to python-config])
    AS_IF([test -z "$PYTHON_INCS"], [
@@ -1126,11 +1155,15 @@ if test "x$with_python" != "xno"; then
       ])
       AC_MSG_CHECKING([python include flags])
       PYTHON_INCS=`$PYTHON_CONFIG --includes`
+      PYTHON_LIBS=`$PYTHON_CONFIG --ldflags`
       AC_MSG_RESULT([$PYTHON_INCS])
+      AC_MSG_RESULT([$PYTHON_LIBS])
   ])
   have_python="yes"
+  AC_DEFINE([HAVE_PYTHON],1,[Python appears to be present.])
 fi
 AC_SUBST([PYTHON_INCS])
+AC_SUBST([PYTHON_LIBS])
 AM_CONDITIONAL([HAVEPYTHON],[test -n "$PYTHON_INCS"])
 
 
@@ -1198,6 +1231,7 @@ if test "x$with_grackle" != "xno"; then
    have_grackle="yes"
 
    echo $GRACKLE_LIBS
+   AS_VAR_APPEND([GRACKLE_LIBS], ["$FCLIBS"])
 
    AC_CHECK_LIB(
       [grackle],
@@ -1205,7 +1239,7 @@ if test "x$with_grackle" != "xno"; then
       [AC_DEFINE([HAVE_GRACKLE],1,[The GRACKLE library appears to be present.])
         AC_DEFINE([CONFIG_BFLOAT_8],1,[Use doubles in grackle])
       ],
-      [AC_MSG_ERROR(Cannot find grackle library!)],
+      [AC_MSG_ERROR(Cannot find grackle library! You need to have a version >= 3.1.1)],
       [$GRACKLE_LIBS])
 fi
 AC_SUBST([GRACKLE_LIBS])
@@ -1226,8 +1260,6 @@ AC_ARG_WITH([velociraptor],
     [with_velociraptor="no"]
 )
 if test "x$with_velociraptor" != "xno"; then
-   AC_PROG_FC
-   AC_FC_LIBRARY_LDFLAGS
    if test "x$with_velociraptor" != "xyes" -a "x$with_velociraptor" != "x"; then
       VELOCIRAPTOR_LIBS="-L$with_velociraptor -lvelociraptor -lmpi -lstdc++ -lhdf5"
       CFLAGS="$CFLAGS -fopenmp"
@@ -1236,6 +1268,7 @@ if test "x$with_velociraptor" != "xno"; then
    fi
 
    have_velociraptor="yes"
+   AS_VAR_APPEND([VELOCIRAPTOR_LIBS], ["$FCLIBS"])
 
    AC_CHECK_LIB(
       [velociraptor],
@@ -1268,99 +1301,16 @@ if test "$enable_dummy_velociraptor" = "yes"; then
   AC_DEFINE(HAVE_DUMMY_VELOCIRAPTOR,1,[The dummy VELOCIraptor library is present.])
 fi
 
-# Now that we found VELOCIraptor, let's check how it was compiled.
-if test "$have_velociraptor" == "yes"; then
-    AC_CHECK_LIB(
-       [velociraptor],
-       [VR_NOMASS],
-       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_NOMASS],1,[The VELOCIraptor library appears to be present and has been compiled with the NOMASS option. Only useful if running a uniform box.])],
-       [AC_MSG_RESULT(VELOCIraptor not compiled to so as to *not* store masses per particle.)],
-       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
-    )
-    AC_CHECK_DECL(
-        [HAVE_VELOCIRAPTOR_WITH_NOMASS],
-        [have_velociraptor_with_nomass="yes"]
-    )
-fi
-
-if test "$have_velociraptor" == "yes"; then
-    AC_CHECK_LIB(
-       [velociraptor],
-       [VR_GASON],
-       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_GAS],1,[The VELOCIraptor library appears to be present and compiled with GASON.])],
-       [AC_MSG_RESULT(VELOCIraptor not compiled to store gas properties)],
-       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
-    )
-    AC_CHECK_DECL(
-        [HAVE_VELOCIRAPTOR_WITH_GAS],
-        [have_velociraptor_with_gas="yes"]
-    )
-fi
-
-if test "$have_velociraptor" == "yes"; then
-    AC_CHECK_LIB(
-       [velociraptor],
-       [VR_STARON],
-       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_STAR],1,[The VELOCIraptor library appears to be present and compiled with STARON.])],
-       [AC_MSG_RESULT(VELOCIraptor not compiled to store star properties)],
-       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
-    )
-    AC_CHECK_DECL(
-        [HAVE_VELOCIRAPTOR_WITH_STAR],
-        [have_velociraptor_with_star="yes"]
-    )
-fi
-
-if test "$have_velociraptor" == "yes"; then
-    AC_CHECK_LIB(
-       [velociraptor],
-       [VR_BHON],
-       [AC_DEFINE([HAVE_VELOCIRAPTOR_WITH_BH],1,[The VELOCIraptor library appears to be present and compiled with BHON.])],
-       [AC_MSG_RESULT(VELOCIraptor not compiled to store bh properties)],
-       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
-    )
-    AC_CHECK_DECL(
-        [HAVE_VELOCIRAPTOR_WITH_BH],
-        [have_velociraptor_with_bh="yes"]
-    )
-fi
-
-# Enable VR to not store mass per particle since all particles have the same mass
-# Reduces memory foot print.
-AC_ARG_ENABLE([velociraptor-uniform-box-no-mass-stored],
-   [AS_HELP_STRING([--enable-velociraptor-uniform-box-no-mass-stored],
-     [Enable VR to not store pass per particle, reducing memory footprint. Only useful for uniform box runs. @<:@yes/no@:>@]
-   )],
-   [enable_velociraptor_uniform_box_no_mass_stored="$enableval"],
-   [enable_velociraptor_uniform_box_no_mass_stored="no"]
+# Check if we should be writing out most bound "orphan" particles from Velociraptor
+AC_ARG_ENABLE([velociraptor-orphans],
+    [AS_HELP_STRING([--enable-velociraptor-orphans],
+       [Enable output of orphan particles @<:@yes/no@:>@]
+    )],
+    [enable_velociraptor_orphans="$enableval"],
+    [enable_velociraptor_orphans="no"]
 )
-
-#check that velociraptor is available if also demanding that it be compiled with no mass stored
-if test "$have_velociraptor" == "no"; then
-    if test "$enable_velociraptor_uniform_box_no_mass_stored" == "yes"; then
-        AC_MSG_ERROR([velociraptor not enabled yet asking to enable velociraptor option of no mass. Either enable by --with-velociraptor= or --disable-velociraptor-uniform-box-no-mass-stored])
-    fi
-fi
-
-if test "$have_velociraptor" == "yes"; then
-    if test "$enable_velociraptor_uniform_box_no_mass_stored" == "yes"; then
-        if test "$have_velociraptor_with_nomass" == "no"; then
-            AC_MSG_ERROR([VELOCIraptor library indicates it stores individual particle masses
-            but swift has been compiled --enable_velociraptor_uniform_box_no_mass_stored. Either disable this option
-            or ensure that the velociraptor library is compiled with -DVR_NO_MASS=ON.])
-        else
-            AC_MSG_ERROR([BLAH BLAH])
-        fi
-    fi
-fi
-if test "$have_velociraptor" == "yes"; then
-    if test "$enable_velociraptor_uniform_box_no_mass_stored" == "no"; then
-        if test "$have_velociraptor_with_nomass" == "yes"; then
-            AC_MSG_ERROR([VELOCIraptor library indicates it does not store individual particle masses
-            but swift has not been compiled --enable_velociraptor_uniform_box_no_mass_stored. Either enable this option
-            or ensure that the velociraptor library is compiled with -DVR_NO_MASS=OFF.])
-        fi
-    fi
+if test "$enable_velociraptor_orphans" = "yes"; then
+   AC_DEFINE([HAVE_VELOCIRAPTOR_ORPHANS], 1, [Orphan particles should be written out])
 fi
 
 # Check for floating-point execeptions
@@ -1564,7 +1514,7 @@ AC_SUBST([NUMA_INCS])
 # As an example for this, see the call to AC_ARG_WITH for cooling.
 AC_ARG_WITH([subgrid],
 	[AS_HELP_STRING([--with-subgrid=<subgrid>],
-		[Master switch for subgrid methods. Inexperienced user should start here. Options are: @<:@none, GEAR, QLA, EAGLE default: none@:>@]
+		[Master switch for subgrid methods. Inexperienced user should start here. Options are: @<:@none, GEAR, QLA, EAGLE, EAGLE-XL default: none@:>@]
 	)],
 	[with_subgrid="$withval"],
 	[with_subgrid=none]
@@ -1579,7 +1529,6 @@ with_subgrid_pressure_floor=none
 with_subgrid_stars=none
 with_subgrid_star_formation=none
 with_subgrid_feedback=none
-with_subgrid_task_order=default
 with_subgrid_sink=none
 
 case "$with_subgrid" in
@@ -1596,8 +1545,7 @@ case "$with_subgrid" in
 	with_subgrid_star_formation=GEAR
 	with_subgrid_feedback=GEAR
 	with_subgrid_black_holes=none
-	with_subgrid_task_order=GEAR
-  	with_subgrid_sink=none
+	with_subgrid_sink=none
 	enable_fof=no
    ;;
    QLA)
@@ -1609,8 +1557,7 @@ case "$with_subgrid" in
 	with_subgrid_star_formation=QLA
 	with_subgrid_feedback=none
 	with_subgrid_black_holes=none
-	with_subgrid_task_order=default
-  	with_subgrid_sink=none
+	with_subgrid_sink=none
 	enable_fof=no
    ;;
    EAGLE)
@@ -1622,8 +1569,7 @@ case "$with_subgrid" in
 	with_subgrid_star_formation=EAGLE
 	with_subgrid_feedback=EAGLE
 	with_subgrid_black_holes=EAGLE
-	with_subgrid_task_order=EAGLE
-  	with_subgrid_sink=none
+	with_subgrid_sink=none
 	enable_fof=yes
    ;;
    EAGLE-XL)
@@ -1635,7 +1581,6 @@ case "$with_subgrid" in
 	with_subgrid_star_formation=EAGLE
 	with_subgrid_feedback=EAGLE
 	with_subgrid_black_holes=EAGLE
-	with_subgrid_task_order=EAGLE
 	with_subgrid_sink=none
 	enable_fof=yes
    ;;
@@ -1674,7 +1619,7 @@ AM_CONDITIONAL([HAVESTANDALONEFOF],[test $enable_standalone_fof = "yes"])
 # Gravity scheme.
 AC_ARG_WITH([gravity],
    [AS_HELP_STRING([--with-gravity=<scheme>],
-      [Gravity scheme to use @<:@basic, with-potential, with-multi-softening default: with-multi-softening@:>@]
+      [Gravity scheme to use @<:@basic, with-multi-softening default: with-multi-softening@:>@]
    )],
    [with_gravity="$withval"],
    [with_gravity="with-multi-softening"]
@@ -1682,7 +1627,7 @@ AC_ARG_WITH([gravity],
 
 case "$with_gravity" in
    with-potential)
-      AC_DEFINE([POTENTIAL_GRAVITY], [1], [Basic gravity scheme with potential calculation])
+      AC_MSG_ERROR([The gravity 'with-potential' scheme does not exist anymore. Please use the basic scheme which now contains potentials.])
    ;;
    with-multi-softening)
       AC_DEFINE([MULTI_SOFTENING_GRAVITY], [1], [Gravity scheme with per-particle type softening value and background particles])
@@ -1695,13 +1640,24 @@ case "$with_gravity" in
    ;;
 esac
 
+AC_ARG_ENABLE([gravitational-potential],
+   [AS_HELP_STRING([--disable-gravitational-potential],
+     [Disable calculation of the gravitational potential.]
+   )],
+   [enable_gravitational_potential="$enableval"],
+   [enable_gravitational_potential="yes"]
+)
+if test "$enable_gravitational_potential" = "no"; then
+   AC_DEFINE([SWIFT_GRAVITY_NO_POTENTIAL],1,[Disable calculation of the gravitational potential])
+fi
+
 # Hydro scheme.
 AC_ARG_WITH([hydro],
    [AS_HELP_STRING([--with-hydro=<scheme>],
-      [Hydro dynamics to use @<:@gadget2, minimal, pressure-entropy, pressure-energy, pressure-energy-monaghan, default, gizmo-mfv, gizmo-mfm, shadowfax, planetary, anarchy-du, anarchy-pu default: gadget2@:>@]
+      [Hydro dynamics to use @<:@gadget2, minimal, pressure-entropy, pressure-energy, pressure-energy-monaghan, phantom, gizmo-mfv, gizmo-mfm, shadowfax, planetary, sphenix, anarchy-pu default: sphenix@:>@]
    )],
    [with_hydro="$withval"],
-   [with_hydro="gadget2"]
+   [with_hydro="sphenix"]
 )
 
 case "$with_hydro" in
@@ -1720,8 +1676,8 @@ case "$with_hydro" in
    pressure-energy-monaghan)
       AC_DEFINE([HOPKINS_PU_SPH_MONAGHAN], [1], [Pressure-Energy SPH with M&M Variable A.V.])
    ;;
-   default)
-      AC_DEFINE([DEFAULT_SPH], [1], [Default SPH])
+   phantom)
+      AC_DEFINE([PHANTOM_SPH], [1], [Phantom SPH])
    ;;
    gizmo-mfv)
       AC_DEFINE([GIZMO_MFV_SPH], [1], [GIZMO MFV SPH])
@@ -1793,6 +1749,24 @@ if test "$enable_debug_interactions" != "no"; then
   fi
 fi
 
+# Check if debugging interactions sinks is switched on.
+AC_ARG_ENABLE([debug-interactions-sinks],
+   [AS_HELP_STRING([--enable-debug-interactions-sinks],
+     [Activate interaction debugging for sinks, logging a maximum of @<:@N@:>@ neighbours. Defaults to 256 if no value set.]
+   )],
+   [enable_debug_interactions_sinks="$enableval"],
+   [enable_debug_interactions_sinks="no"]
+)
+if test "$enable_debug_interactions_sinks" != "no"; then
+    AC_DEFINE([DEBUG_INTERACTIONS_SINKS],1,[Enable interaction debugging for sinks])
+    if test "$enable_debug_interactions_sinks" == "yes"; then
+      AC_DEFINE([MAX_NUM_OF_NEIGHBOURS_SINKS],256,[The maximum number of particle neighbours to be logged for sinks])
+      [enable_debug_interactions_sinks="yes (Logging up to 256 neighbours)"]
+    else
+      AC_DEFINE_UNQUOTED([MAX_NUM_OF_NEIGHBOURS_SINKS], [$enableval] ,[The maximum number of particle neighbours to be logged for sinks])
+      [enable_debug_interactions_sinks="yes (Logging up to $enableval neighbours)"]
+    fi
+fi
 
 # SPH Kernel function
 AC_ARG_WITH([kernel],
@@ -1923,60 +1897,11 @@ case "$with_riemann" in
       AC_MSG_ERROR([Unknown Riemann solver: $with_riemann])
    ;;
 esac
-#  Cooling function
-AC_ARG_WITH([cooling],
-   [AS_HELP_STRING([--with-cooling=<function>],
-      [cooling function @<:@none, const-du, const-lambda, QLA, EAGLE, grackle_* default: none@:>@.
-      For Grackle, you need to provide the primordial chemistry parameter (e.g. grackle_0)]
-   )],
-   [with_cooling="$withval"],
-   [with_cooling="none"]
-)
-
-if test "$with_subgrid" != "none"; then
-   if test "$with_cooling" != "none"; then
-      AC_MSG_ERROR([Cannot provide with-subgrid and with-cooling together])
-   else
-      with_cooling="$with_subgrid_cooling"
-   fi
-fi
-
-case "$with_cooling" in
-   none)
-      AC_DEFINE([COOLING_NONE], [1], [No cooling function])
-   ;;
-   const-du)
-      AC_DEFINE([COOLING_CONST_DU], [1], [Const du/dt cooling function])
-   ;;
-   const-lambda)
-      AC_DEFINE([COOLING_CONST_LAMBDA], [1], [Const Lambda cooling function])
-   ;;
-   compton)
-      AC_DEFINE([COOLING_COMPTON], [1], [Compton cooling off the CMB])
-   ;;
-   grackle_*)
-      AC_DEFINE([COOLING_GRACKLE], [1], [Cooling via the grackle library])
-      primordial_chemistry=${with_cooling:8}
-      AC_DEFINE_UNQUOTED([COOLING_GRACKLE_MODE], [$primordial_chemistry], [Grackle chemistry network])
-   ;;
-   QLA)
-      AC_DEFINE([COOLING_QLA], [1], [Cooling following the Quick-Lyman-alpha model])
-   ;;
-   EAGLE)
-      AC_DEFINE([COOLING_EAGLE], [1], [Cooling following the EAGLE model])
-   ;;
-   COLIBRE)
-      AC_DEFINE([COOLING_COLIBRE], [1], [Cooling following the COLIBRE model])
-   ;;
-   *)
-      AC_MSG_ERROR([Unknown cooling function: $with_cooling])
-   ;;
-esac
 
 #  chemistry function
 AC_ARG_WITH([chemistry],
    [AS_HELP_STRING([--with-chemistry=<function>],
-      [chemistry function @<:@none, GEAR_*, QLA, EAGLE default: none@:>@
+      [chemistry function @<:@none, GEAR_*, GEAR_DIFFUSION_*, QLA, EAGLE default: none@:>@
       For GEAR, you need to provide the number of elements (e.g. GEAR_10)]
    )],
    [with_chemistry="$withval"],
@@ -1994,6 +1919,11 @@ fi
 case "$with_chemistry" in
    none)
       AC_DEFINE([CHEMISTRY_NONE], [1], [No chemistry function])
+   ;;
+   GEAR_DIFFUSION_*)
+      AC_DEFINE([CHEMISTRY_GEAR_DIFFUSION], [1], [Chemistry taken from the GEAR model including the metal diffusion])
+      number_element=${with_chemistry:15}
+      AC_DEFINE_UNQUOTED([GEAR_CHEMISTRY_ELEMENT_COUNT], [$number_element], [Number of element to follow])
    ;;
    GEAR_*)
       AC_DEFINE([CHEMISTRY_GEAR], [1], [Chemistry taken from the GEAR model])
@@ -2018,6 +1948,70 @@ if test "$with_chemistry" != "none"; then
             AC_MSG_ERROR([Cannot run with hand vectorisation and chemistry yet. Please use --disable-hand-vec])
          fi
       fi
+   fi
+fi
+
+#  Cooling function
+AC_ARG_WITH([cooling],
+   [AS_HELP_STRING([--with-cooling=<model>],
+      [cooling function @<:@none, const-du, const-lambda, QLA, EAGLE, COLIBRE, Wiersma, Ploeckinger, grackle_* default: none@:>@.
+      For Grackle, you need to provide the primordial chemistry parameter (e.g. grackle_0)]
+   )],
+   [with_cooling="$withval"],
+   [with_cooling="none"]
+)
+
+if test "$with_subgrid" != "none"; then
+   if test "$with_cooling" != "none"; then
+      AC_MSG_ERROR([Cannot provide with-subgrid and with-cooling together])
+   else
+      with_cooling="$with_subgrid_cooling"
+   fi
+fi
+
+case "$with_cooling" in
+   none)
+      AC_DEFINE([COOLING_NONE], [1], [No cooling function])
+   ;;
+   const-du)
+      AC_DEFINE([COOLING_CONST_DU], [1], [Const du/dt cooling function])
+   ;;
+   const-lambda)
+      AC_DEFINE([COOLING_CONST_LAMBDA], [1], [Const Lambda cooling function])
+   ;;
+   grackle_*)
+      AC_DEFINE([COOLING_GRACKLE], [1], [Cooling via the grackle library])
+      primordial_chemistry=${with_cooling:8}
+      AC_DEFINE_UNQUOTED([COOLING_GRACKLE_MODE], [$primordial_chemistry], [Grackle chemistry network])
+   ;;
+   QLA)
+      AC_DEFINE([COOLING_QLA], [1], [Cooling following the Quick-Lyman-alpha model])
+      with_cooling="QLA (Ploeckinger+20 tables) with constant primordial Z"
+   ;;
+   EAGLE)
+      AC_DEFINE([COOLING_EAGLE], [1], [Cooling following the EAGLE model (Wiersma+09 tables)])
+      with_cooling="EAGLE (Wiersma+09 tables)"
+   ;;
+   Wiersma)
+      AC_DEFINE([COOLING_EAGLE], [1], [Cooling following the EAGLE model (Wiersma+09 tables)])
+      with_cooling="EAGLE (Wiersma+09 tables)"
+   ;;
+   COLIBRE)
+      AC_DEFINE([COOLING_COLIBRE], [1], [Cooling following the COLIBRE model (Ploeckinger+20 tables)])
+      with_cooling="COLIBRE (Ploeckinger+20 tables)"
+   ;;
+   Ploeckinger)
+      AC_DEFINE([COOLING_COLIBRE], [1], [Cooling following the COLIBRE model (Ploeckinger+20 tables)])
+      with_cooling="COLIBRE (Ploeckinger+20 tables)"
+   ;;
+   *)
+      AC_MSG_ERROR([Unknown cooling function: $with_cooling])
+   ;;
+esac
+
+if test "${with_cooling:0:5}" = "EAGLE" || test "${with_cooling:0:7}" = "COLIBRE"; then
+   if test "$with_chemistry" = "none"; then
+      AC_MSG_ERROR([Cannot run with EAGLE or COLIBRE cooling without chemistry. Please pick a chemistry model])
    fi
 fi
 
@@ -2171,42 +2165,10 @@ case "$with_sink" in
    ;;
 esac
 
-# Task order
-AC_ARG_WITH([task-order],
-   [AS_HELP_STRING([--with-task-order=<model>],
-       [Task order to use @<:@default, EAGLE, GEAR default: default@:>@]
-   )],
-   [with_task_order="$withval"],
-   [with_task_order="default"]
-)
-
-if test "$with_subgrid" != "none"; then
-   if test "$with_task_order" != "default"; then
-      AC_MSG_ERROR([Cannot provide with-subgrid and with-task-order together])
-   else
-      with_task_order="$with_subgrid_task_order"
-   fi
-fi
-
-case "$with_task_order" in
-   EAGLE)
-       AC_DEFINE([TASK_ORDER_EAGLE], [1], [EAGLE task order])
-   ;;
-   default)
-       AC_DEFINE([TASK_ORDER_DEFAULT], [1], [Default (i.e. EAGLE/OWLS) task order])
-   ;;
-   GEAR)
-       AC_DEFINE([TASK_ORDER_GEAR], [1], [GEAR task order])
-   ;;
-   *)
-       AC_MSG_ERROR([Unknown task ordering: $with_task_order])
-   ;;
-esac
-
 #  External potential
 AC_ARG_WITH([ext-potential],
    [AS_HELP_STRING([--with-ext-potential=<pot>],
-      [external potential @<:@none, point-mass, point-mass-ring, point-mass-softened, isothermal, nfw, hernquist, disc-patch, sine-wave, constant, default: none@:>@]
+      [external potential @<:@none, point-mass, point-mass-ring, point-mass-softened, isothermal, nfw, nfw_mn, hernquist, disc-patch, sine-wave, constant, default: none@:>@]
    )],
    [with_potential="$withval"],
    [with_potential="none"]
@@ -2365,6 +2327,31 @@ AC_ARG_WITH([multipole-order],
 )
 AC_DEFINE_UNQUOTED([SELF_GRAVITY_MULTIPOLE_ORDER], [$with_multipole_order], [Multipole order])
 
+#  Radiative transfer scheme
+AC_ARG_WITH([rt],
+   [AS_HELP_STRING([--with-rt=<scheme>],
+      [Radiative transfer scheme to use @<:@none, M1closure, debug default: none@:>@. This is still work in progress, currently no scheme works.]
+   )],
+   [with_rt="$withval"],
+   [with_rt="none"]
+)
+
+case "$with_rt" in
+   none)
+      AC_DEFINE([RT_NONE], [1], [No radiative transfer scheme])
+   ;;
+   M1closure)
+      AC_DEFINE([RT_M1], [1], [M1 closure scheme])
+   ;;
+   debug)
+      AC_DEFINE([RT_DEBUG], [1], [debugging scheme])
+   ;;
+   *)
+      AC_MSG_ERROR([Unknown radiative transfer scheme: $with_rt])
+   ;;
+esac
+
+
 # Check for git, needed for revision stamps.
 AC_PATH_PROG([GIT_CMD], [git])
 AC_SUBST([GIT_CMD])
@@ -2375,22 +2362,22 @@ DX_INIT_DOXYGEN(SWIFT, doc/Doxyfile, doc/)
 AM_CONDITIONAL([HAVE_DOXYGEN], [test "$ac_cv_path_ac_pt_DX_DOXYGEN" != ""])
 
 # Check if using QLA cooling
-AM_CONDITIONAL([HAVEQLACOOLING], [test $with_cooling = "QLA"])
+AM_CONDITIONAL([HAVEQLACOOLING], [test "${with_cooling:0:3}" = "QLA"])
 
 # Check if using EAGLE cooling
-AM_CONDITIONAL([HAVEEAGLECOOLING], [test $with_cooling = "EAGLE"])
+AM_CONDITIONAL([HAVEEAGLECOOLING], [test "${with_cooling:0:5}" = "EAGLE"])
 
 # Check if using COLIBRE cooling
-AM_CONDITIONAL([HAVECOLIBRECOOLING], [test $with_cooling = "COLIBRE"])
+AM_CONDITIONAL([HAVECOLIBRECOOLING], [test "${with_cooling:0:7}" = "COLIBRE"])
 
 # Check if using EAGLE feedback
-AM_CONDITIONAL([HAVEEAGLEFEEDBACK], [test $with_feedback = "EAGLE"])
+AM_CONDITIONAL([HAVEEAGLEFEEDBACK], [test "$with_feedback" = "EAGLE"])
 
 # check if using grackle cooling
-AM_CONDITIONAL([HAVEGRACKLECOOLING], [test ${with_cooling:0:7} == "grackle"])
+AM_CONDITIONAL([HAVEGRACKLECOOLING], [test "${with_cooling:0:7}" = "grackle"])
 
 # check if using gear feedback
-AM_CONDITIONAL([HAVEGEARFEEDBACK], [test $with_feedback == "GEAR"])
+AM_CONDITIONAL([HAVEGEARFEEDBACK], [test "$with_feedback" = "GEAR"])
 
 # Handle .in files.
 AC_CONFIG_FILES([Makefile src/Makefile examples/Makefile examples/Cooling/CoolingRates/Makefile doc/Makefile doc/Doxyfile tests/Makefile])
@@ -2458,6 +2445,7 @@ AC_MSG_RESULT([
 
    Gravity scheme      : $with_gravity
    Multipole order     : $with_multipole_order
+   Compute potential   : $enable_gravitational_potential
    No gravity below ID : $no_gravity_below_id
    Make gravity glass  : $gravity_glass_making
    External potential  : $with_potential
@@ -2472,7 +2460,7 @@ AC_MSG_RESULT([
    Star feedback model  : $with_feedback
    Sink particle model  : $with_sink
    Black holes model    : $with_black_holes
-   Task dependencies    : $with_task_order
+   Radiative transfer   : $with_rt
 
    Atomic operations in tasks  : $enable_atomics_within_tasks
    Individual timers           : $enable_timers
@@ -2486,6 +2474,8 @@ AC_MSG_RESULT([
    Gravity checks              : $gravity_force_checks
    Custom icbrtf               : $enable_custom_icbrtf
    Boundary particles          : $boundary_particles
+   Fixed boundary particles    : $fixed_boundary_particles
+   Planetary fixed entropy     : $planetary_fixed_entropy
 
    Particle Logger      : $with_logger
    Python enabled       : $have_python

@@ -46,12 +46,17 @@
  * @param sp the new created star particle with its properties.
  */
 INLINE static void chemistry_copy_star_formation_properties(
-    const struct part* p, const struct xpart* xp, struct spart* sp) {
+    struct part* p, const struct xpart* xp, struct spart* sp) {
+
+  float mass = hydro_get_mass(p);
 
   /* Store the chemistry struct in the star particle */
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
     sp->chemistry_data.metal_mass_fraction[i] =
         p->chemistry_data.smoothed_metal_mass_fraction[i];
+
+    /* Remove the metals taken by the star. */
+    p->chemistry_data.metal_mass[i] *= mass / (mass + sp->mass);
   }
 }
 
@@ -140,6 +145,12 @@ static INLINE void chemistry_init_backend(struct swift_params* parameter_file,
   const float initial_metallicity = parser_get_param_float(
       parameter_file, "GEARChemistry:initial_metallicity");
 
+  if (initial_metallicity < 0) {
+    message("Setting the initial metallicity from the snapshot.");
+  } else {
+    message("Setting the initial metallicity from the parameter file.");
+  }
+
   /* Set the initial metallicities */
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
     data->initial_metallicities[i] = initial_metallicity;
@@ -172,9 +183,6 @@ __attribute__((always_inline)) INLINE static void chemistry_init_part(
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
     /* Reset the smoothed metallicity */
     cpd->smoothed_metal_mass_fraction[i] = 0.f;
-
-    /* Convert the total mass into mass fraction */
-    cpd->metal_mass_fraction[i] = cpd->metal_mass[i] / p->mass;
   }
 }
 
@@ -198,20 +206,15 @@ __attribute__((always_inline)) INLINE static void chemistry_end_density(
   const float h = p->h;
   const float h_inv = 1.0f / h;                       /* 1/h */
   const float factor = pow_dimension(h_inv) / p->rho; /* 1 / h^d * rho */
-  const float m = p->mass;
 
   struct chemistry_part_data* cpd = &p->chemistry_data;
 
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
     /* Final operation on the density (add self-contribution). */
-    cpd->smoothed_metal_mass_fraction[i] +=
-        m * cpd->metal_mass_fraction[i] * kernel_root;
+    cpd->smoothed_metal_mass_fraction[i] += cpd->metal_mass[i] * kernel_root;
 
     /* Finish the calculation by inserting the missing h-factors */
     cpd->smoothed_metal_mass_fraction[i] *= factor;
-
-    /* Convert the mass fraction into a total mass */
-    cpd->metal_mass[i] = m * cpd->metal_mass_fraction[i];
   }
 }
 
@@ -222,7 +225,8 @@ __attribute__((always_inline)) INLINE static void chemistry_end_density(
  * @param cosmo The current cosmological model.
  */
 __attribute__((always_inline)) INLINE static void chemistry_end_force(
-    struct part* restrict p, const struct cosmology* cosmo) {}
+    struct part* restrict p, const struct cosmology* cosmo,
+    const int with_cosmology, const double time, const double dt) {}
 
 /**
  * @brief Sets all particle fields to sensible values when the #part has 0 ngbs.
@@ -241,9 +245,7 @@ chemistry_part_has_no_neighbours(struct part* restrict p,
   /* Set the smoothed fractions with the non smoothed fractions */
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
     p->chemistry_data.smoothed_metal_mass_fraction[i] =
-        p->chemistry_data.metal_mass_fraction[i];
-    p->chemistry_data.metal_mass[i] =
-        p->chemistry_data.metal_mass_fraction[i] * p->mass;
+        p->chemistry_data.metal_mass[i] / hydro_get_mass(p);
   }
 }
 
@@ -287,7 +289,14 @@ __attribute__((always_inline)) INLINE static void chemistry_first_init_part(
     struct xpart* restrict xp) {
 
   for (int i = 0; i < GEAR_CHEMISTRY_ELEMENT_COUNT; i++) {
-    p->chemistry_data.metal_mass[i] = data->initial_metallicities[i] * p->mass;
+    if (data->initial_metallicities[i] < 0) {
+      /* Use the value from the IC. We are reading the metal mass fraction. */
+      p->chemistry_data.metal_mass[i] *= hydro_get_mass(p);
+    } else {
+      /* Use the value from the parameter file */
+      p->chemistry_data.metal_mass[i] =
+          data->initial_metallicities[i] * hydro_get_mass(p);
+    }
   }
 
   chemistry_init_part(p, data);
@@ -340,6 +349,30 @@ __attribute__((always_inline)) INLINE static void chemistry_add_part_to_bpart(
 }
 
 /**
+ * @brief Transfer chemistry data of a gas particle to a black hole.
+ *
+ * In contrast to `chemistry_add_part_to_bpart`, only a fraction of the
+ * masses stored in the gas particle are transferred here. Absolute masses
+ * of the gas particle are adjusted as well.
+ * Black holes don't store fractions so we need to add element masses.
+ *
+ * Nothing to do here.
+ *
+ * @param bp_data The black hole data to add to.
+ * @param p_data The gas data to use.
+ * @param nibble_mass The mass to be removed from the gas particle.
+ * @param nibble_fraction The fraction of the (original) mass of the gas
+ *        particle that is removed.
+ */
+__attribute__((always_inline)) INLINE static void
+chemistry_transfer_part_to_bpart(struct chemistry_bpart_data* bp_data,
+                                 struct chemistry_part_data* p_data,
+                                 const double nibble_mass,
+                                 const double nibble_fraction) {
+  error("To be implemented.");
+}
+
+/**
  * @brief Add the chemistry data of a black hole to another one.
  *
  * Nothing to do here.
@@ -365,13 +398,42 @@ __attribute__((always_inline)) INLINE static void chemistry_split_part(
 }
 
 /**
+ * @brief Returns the abundance array (metal mass fractions) of the
+ * gas particle to be used in feedback/enrichment related routines.
+ *
+ * This is unused in GEAR. --> return NULL
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float const*
+chemistry_get_metal_mass_fraction_for_feedback(const struct part* restrict p) {
+  error("Not implemented");
+  return NULL;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * gas particle to be used in feedback/enrichment related routines.
+ *
+ * This is unused in GEAR. --> return 0
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_total_metal_mass_fraction_for_feedback(
+    const struct part* restrict p) {
+  error("Not implemented");
+  return 0.f;
+}
+
+/**
  * @brief Returns the total metallicity (metal mass fraction) of the
  * star particle to be used in feedback/enrichment related routines.
  *
  * @param sp Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float
-chemistry_get_total_metal_mass_fraction_for_feedback(
+__attribute__((always_inline)) INLINE static double
+chemistry_get_star_total_metal_mass_fraction_for_feedback(
     const struct spart* restrict sp) {
 
   return sp->chemistry_data
@@ -384,8 +446,8 @@ chemistry_get_total_metal_mass_fraction_for_feedback(
  *
  * @param sp Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float const*
-chemistry_get_metal_mass_fraction_for_feedback(
+__attribute__((always_inline)) INLINE static double const*
+chemistry_get_star_metal_mass_fraction_for_feedback(
     const struct spart* restrict sp) {
 
   return sp->chemistry_data.metal_mass_fraction;
@@ -397,7 +459,7 @@ chemistry_get_metal_mass_fraction_for_feedback(
  *
  * @param p Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float
+__attribute__((always_inline)) INLINE static double
 chemistry_get_total_metal_mass_fraction_for_cooling(
     const struct part* restrict p) {
 
@@ -411,7 +473,7 @@ chemistry_get_total_metal_mass_fraction_for_cooling(
  *
  * @param p Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float const*
+__attribute__((always_inline)) INLINE static double const*
 chemistry_get_metal_mass_fraction_for_cooling(const struct part* restrict p) {
 
   return p->chemistry_data.smoothed_metal_mass_fraction;
@@ -423,7 +485,7 @@ chemistry_get_metal_mass_fraction_for_cooling(const struct part* restrict p) {
  *
  * @param p Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float
+__attribute__((always_inline)) INLINE static double
 chemistry_get_total_metal_mass_fraction_for_star_formation(
     const struct part* restrict p) {
 
@@ -437,11 +499,49 @@ chemistry_get_total_metal_mass_fraction_for_star_formation(
  *
  * @param p Pointer to the particle data.
  */
-__attribute__((always_inline)) INLINE static float const*
+__attribute__((always_inline)) INLINE static double const*
 chemistry_get_metal_mass_fraction_for_star_formation(
     const struct part* restrict p) {
 
   return p->chemistry_data.smoothed_metal_mass_fraction;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * gas particle to be used in the stats related routines.
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_total_metal_mass_for_stats(const struct part* restrict p) {
+
+  return p->chemistry_data.metal_mass[GEAR_CHEMISTRY_ELEMENT_COUNT - 1];
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * star particle to be used in the stats related routines.
+ *
+ * @param sp Pointer to the star particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_star_total_metal_mass_for_stats(const struct spart* restrict sp) {
+
+  return sp->chemistry_data
+             .metal_mass_fraction[GEAR_CHEMISTRY_ELEMENT_COUNT - 1] *
+         sp->mass;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * black hole particle to be used in the stats related routines.
+ *
+ * @param bp Pointer to the BH particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_bh_total_metal_mass_for_stats(const struct bpart* restrict bp) {
+  error("Not implemented");
+  return 0.f;
 }
 
 #endif /* SWIFT_CHEMISTRY_GEAR_H */

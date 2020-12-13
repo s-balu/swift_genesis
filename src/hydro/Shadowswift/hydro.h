@@ -19,7 +19,6 @@
 #ifndef SWIFT_SHADOWSWIFT_HYDRO_H
 #define SWIFT_SHADOWSWIFT_HYDRO_H
 
-#include <float.h>
 #include "adiabatic_index.h"
 #include "approx_math.h"
 #include "cosmology.h"
@@ -29,6 +28,8 @@
 #include "hydro_properties.h"
 #include "hydro_space.h"
 #include "voronoi_algorithm.h"
+
+#include <float.h>
 
 /**
  * @brief Computes the hydro time-step of a given particle
@@ -961,8 +962,9 @@ __attribute__((always_inline)) INLINE static float hydro_get_physical_density(
  *
  * @param p The particle.
  * @param xp The extended particle data.
+ * @param time The simulation time.
  */
 __attribute__((always_inline)) INLINE static void hydro_remove_part(
-    const struct part* p, const struct xpart* xp) {}
+    const struct part* p, const struct xpart* xp, const double time) {}
 
 #endif /* SWIFT_SHADOWSWIFT_HYDRO_H */

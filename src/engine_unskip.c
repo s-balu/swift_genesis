@@ -44,7 +44,9 @@ enum task_broad_types {
   task_broad_types_hydro = 1,
   task_broad_types_gravity,
   task_broad_types_stars,
+  task_broad_types_sinks,
   task_broad_types_black_holes,
+  task_broad_types_rt,
   task_broad_types_count,
 };
 
@@ -175,6 +177,38 @@ static void engine_do_unskip_black_holes(struct cell *c, struct engine *e) {
 }
 
 /**
+ * @brief Unskip any sink tasks associated with active cells.
+ *
+ * @param c The cell.
+ * @param e The engine.
+ */
+static void engine_do_unskip_sinks(struct cell *c, struct engine *e) {
+
+  /* Early abort (are we below the level where tasks are)? */
+  if (!cell_get_flag(c, cell_flag_has_tasks)) return;
+
+  /* Ignore empty cells. */
+  if (c->sinks.count == 0 && c->hydro.count == 0) return;
+
+  /* Skip inactive cells. */
+  if (!cell_is_active_sinks(c, e) && !cell_is_active_hydro(c, e)) return;
+
+  /* Recurse */
+  if (c->split) {
+    for (int k = 0; k < 8; k++) {
+      if (c->progeny[k] != NULL) {
+        struct cell *cp = c->progeny[k];
+        engine_do_unskip_sinks(cp, e);
+      }
+    }
+  }
+
+  /* Unskip any active tasks. */
+  const int forcerebuild = cell_unskip_sinks_tasks(c, &e->sched);
+  if (forcerebuild) atomic_inc(&e->forcerebuild);
+}
+
+/**
  * @brief Unskip any gravity tasks associated with active cells.
  *
  * @param c The cell.
@@ -203,6 +237,38 @@ static void engine_do_unskip_gravity(struct cell *c, struct engine *e) {
 
   /* Unskip any active tasks. */
   cell_unskip_gravity_tasks(c, &e->sched);
+}
+
+/**
+ * @brief Unskip any radiative transfer tasks associated with active cells.
+ *
+ * @param c The cell.
+ * @param e The engine.
+ */
+static void engine_do_unskip_rt(struct cell *c, struct engine *e) {
+
+  /* Early abort (are we below the level where tasks are)? */
+  if (!cell_get_flag(c, cell_flag_has_tasks)) return;
+
+  /* Ignore empty cells. */
+  if (c->hydro.count == 0) return;
+
+  /* Skip inactive cells. */
+  if (!cell_is_active_hydro(c, e)) return;
+
+  /* Recurse */
+  if (c->split) {
+    for (int k = 0; k < 8; k++) {
+      if (c->progeny[k] != NULL) {
+        struct cell *cp = c->progeny[k];
+        engine_do_unskip_rt(cp, e);
+      }
+    }
+  }
+
+  /* Unskip any active tasks. */
+  const int forcerebuild = cell_unskip_rt_tasks(c, &e->sched);
+  if (forcerebuild) atomic_inc(&e->forcerebuild);
 }
 
 /**
@@ -269,12 +335,26 @@ void engine_do_unskip_mapper(void *map_data, int num_elements,
 #endif
         engine_do_unskip_stars(c, e, with_star_formation);
         break;
+      case task_broad_types_sinks:
+#ifdef SWIFT_DEBUG_CHECKS
+        if (!(e->policy & engine_policy_sinks))
+          error("Trying to unskip sink tasks in a non-sinks run!");
+#endif
+        engine_do_unskip_sinks(c, e);
+        break;
       case task_broad_types_black_holes:
 #ifdef SWIFT_DEBUG_CHECKS
         if (!(e->policy & engine_policy_black_holes))
           error("Trying to unskip black holes tasks in a non-BH run!");
 #endif
         engine_do_unskip_black_holes(c, e);
+        break;
+      case task_broad_types_rt:
+#ifdef SWIFT_DEBUG_CHECKS
+        if (!(e->policy & engine_policy_rt))
+          error("Trying to unskip radiative transfer tasks in a non-rt run!");
+#endif
+        engine_do_unskip_rt(c, e);
         break;
       default:
 #ifdef SWIFT_DEBUG_CHECKS
@@ -300,8 +380,10 @@ void engine_unskip(struct engine *e) {
   const int with_self_grav = e->policy & engine_policy_self_gravity;
   const int with_ext_grav = e->policy & engine_policy_external_gravity;
   const int with_stars = e->policy & engine_policy_stars;
+  const int with_sinks = e->policy & engine_policy_sinks;
   const int with_feedback = e->policy & engine_policy_feedback;
   const int with_black_holes = e->policy & engine_policy_black_holes;
+  const int with_rt = e->policy & engine_policy_rt;
 
 #ifdef WITH_PROFILER
   static int count = 0;
@@ -322,6 +404,7 @@ void engine_unskip(struct engine *e) {
          cell_is_active_gravity(c, e)) ||
         (with_feedback && cell_is_active_stars(c, e)) ||
         (with_stars && c->nodeID == nodeID && cell_is_active_stars(c, e)) ||
+        (with_sinks && cell_is_active_sinks(c, e)) ||
         (with_black_holes && cell_is_active_black_holes(c, e))) {
 
       if (num_active_cells != k)
@@ -346,8 +429,16 @@ void engine_unskip(struct engine *e) {
     data.task_types[multiplier] = task_broad_types_stars;
     multiplier++;
   }
+  if (with_sinks) {
+    data.task_types[multiplier] = task_broad_types_sinks;
+    multiplier++;
+  }
   if (with_black_holes) {
     data.task_types[multiplier] = task_broad_types_black_holes;
+    multiplier++;
+  }
+  if (with_rt) {
+    data.task_types[multiplier] = task_broad_types_rt;
     multiplier++;
   }
 

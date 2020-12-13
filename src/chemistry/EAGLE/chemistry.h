@@ -294,9 +294,13 @@ static INLINE void chemistry_print_backend(
  *
  * @param p The particle to act upon.
  * @param cosmo The current cosmological model.
+ * @param with_cosmology Are we running with the cosmology?
+ * @param time Current time of the simulation.
+ * @param dt Time step (in physical units).
  */
 __attribute__((always_inline)) INLINE static void chemistry_end_force(
-    struct part* restrict p, const struct cosmology* cosmo) {}
+    struct part* restrict p, const struct cosmology* cosmo,
+    const int with_cosmology, const double time, const double dt) {}
 
 /**
  * @brief Computes the chemistry-related time-step constraint.
@@ -348,6 +352,9 @@ __attribute__((always_inline)) INLINE static void chemistry_bpart_from_part(
       p_data->metal_mass_fraction_from_AGB * gas_mass;
   bp_data->iron_mass_from_SNIa =
       p_data->iron_mass_fraction_from_SNIa * gas_mass;
+  bp_data->formation_metallicity = p_data->metal_mass_fraction_total;
+  bp_data->smoothed_formation_metallicity =
+      p_data->smoothed_metal_mass_fraction_total;
 }
 
 /**
@@ -378,6 +385,52 @@ __attribute__((always_inline)) INLINE static void chemistry_add_part_to_bpart(
       p_data->metal_mass_fraction_from_AGB * gas_mass;
   bp_data->iron_mass_from_SNIa +=
       p_data->iron_mass_fraction_from_SNIa * gas_mass;
+}
+
+/**
+ * @brief Transfer chemistry data of a gas particle to a black hole.
+ *
+ * In contrast to `chemistry_add_part_to_bpart`, only a fraction of the
+ * masses stored in the gas particle are transferred here. Absolute masses
+ * of the gas particle are adjusted as well.
+ * Black holes don't store fractions so we need to add element masses.
+ *
+ * We expect the nibble_mass to be the gas particle mass multiplied by the
+ * nibble_fraction.
+ *
+ * @param bp_data The black hole data to add to.
+ * @param p_data The gas data to use.
+ * @param nibble_mass The mass to be removed from the gas particle.
+ * @param nibble_fraction The fraction of the (original) mass of the gas
+ *        particle that is removed.
+ */
+__attribute__((always_inline)) INLINE static void
+chemistry_transfer_part_to_bpart(struct chemistry_bpart_data* bp_data,
+                                 struct chemistry_part_data* p_data,
+                                 const double nibble_mass,
+                                 const double nibble_fraction) {
+
+  bp_data->metal_mass_total += p_data->metal_mass_fraction_total * nibble_mass;
+  for (int i = 0; i < chemistry_element_count; ++i)
+    bp_data->metal_mass[i] += p_data->metal_mass_fraction[i] * nibble_mass;
+
+  bp_data->mass_from_SNIa += p_data->mass_from_SNIa * nibble_fraction;
+  bp_data->mass_from_SNII += p_data->mass_from_SNII * nibble_fraction;
+  bp_data->mass_from_AGB += p_data->mass_from_AGB * nibble_fraction;
+
+  /* Absolute masses, so need to reduce the gas particle */
+  p_data->mass_from_SNIa -= p_data->mass_from_SNIa * nibble_fraction;
+  p_data->mass_from_SNII -= p_data->mass_from_SNII * nibble_fraction;
+  p_data->mass_from_AGB -= p_data->mass_from_AGB * nibble_fraction;
+
+  bp_data->metal_mass_from_SNIa +=
+      p_data->metal_mass_fraction_from_SNIa * nibble_mass;
+  bp_data->metal_mass_from_SNII +=
+      p_data->metal_mass_fraction_from_SNII * nibble_mass;
+  bp_data->metal_mass_from_AGB +=
+      p_data->metal_mass_fraction_from_AGB * nibble_mass;
+  bp_data->iron_mass_from_SNIa +=
+      p_data->iron_mass_fraction_from_SNIa * nibble_mass;
 }
 
 /**
@@ -420,6 +473,37 @@ __attribute__((always_inline)) INLINE static void chemistry_split_part(
 
 /**
  * @brief Returns the total metallicity (metal mass fraction) of the
+ * gas particle to be used in feedback/enrichment related routines.
+ *
+ * We return the un-smoothed quantity here as the star will smooth
+ * over its gas neighbours.
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_total_metal_mass_fraction_for_feedback(
+    const struct part* restrict p) {
+
+  return p->chemistry_data.metal_mass_fraction_total;
+}
+
+/**
+ * @brief Returns the abundance array (metal mass fractions) of the
+ * gas particle to be used in feedback/enrichment related routines.
+ *
+ * We return the un-smoothed quantity here as the star will smooth
+ * over its gas neighbours.
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float const*
+chemistry_get_metal_mass_fraction_for_feedback(const struct part* restrict p) {
+
+  return p->chemistry_data.metal_mass_fraction;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
  * star particle to be used in feedback/enrichment related routines.
  *
  * EAGLE uses smooth abundances for everything.
@@ -427,7 +511,7 @@ __attribute__((always_inline)) INLINE static void chemistry_split_part(
  * @param sp Pointer to the particle data.
  */
 __attribute__((always_inline)) INLINE static float
-chemistry_get_total_metal_mass_fraction_for_feedback(
+chemistry_get_star_total_metal_mass_fraction_for_feedback(
     const struct spart* restrict sp) {
 
   return sp->chemistry_data.smoothed_metal_mass_fraction_total;
@@ -442,7 +526,7 @@ chemistry_get_total_metal_mass_fraction_for_feedback(
  * @param sp Pointer to the particle data.
  */
 __attribute__((always_inline)) INLINE static float const*
-chemistry_get_metal_mass_fraction_for_feedback(
+chemistry_get_star_metal_mass_fraction_for_feedback(
     const struct spart* restrict sp) {
 
   return sp->chemistry_data.smoothed_metal_mass_fraction;
@@ -505,6 +589,42 @@ chemistry_get_metal_mass_fraction_for_star_formation(
     const struct part* restrict p) {
 
   return p->chemistry_data.smoothed_metal_mass_fraction;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * gas particle to be used in the stats related routines.
+ *
+ * @param p Pointer to the particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_total_metal_mass_for_stats(const struct part* restrict p) {
+
+  return p->chemistry_data.metal_mass_fraction_total * hydro_get_mass(p);
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * star particle to be used in the stats related routines.
+ *
+ * @param sp Pointer to the star particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_star_total_metal_mass_for_stats(const struct spart* restrict sp) {
+
+  return sp->chemistry_data.metal_mass_fraction_total * sp->mass;
+}
+
+/**
+ * @brief Returns the total metallicity (metal mass fraction) of the
+ * black hole particle to be used in the stats related routines.
+ *
+ * @param bp Pointer to the BH particle data.
+ */
+__attribute__((always_inline)) INLINE static float
+chemistry_get_bh_total_metal_mass_for_stats(const struct bpart* restrict bp) {
+
+  return bp->chemistry_data.metal_mass_total;
 }
 
 #endif /* SWIFT_CHEMISTRY_EAGLE_H */

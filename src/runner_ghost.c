@@ -33,6 +33,7 @@
 #include "feedback.h"
 #include "pressure_floor.h"
 #include "pressure_floor_iact.h"
+#include "rt.h"
 #include "space_getsid.h"
 #include "star_formation.h"
 #include "stars.h"
@@ -76,6 +77,7 @@ void runner_do_stars_ghost(struct runner *r, struct cell *c, int timer) {
   const struct unit_system *us = e->internal_units;
   const struct phys_const *phys_const = e->physical_constants;
   const int with_cosmology = (e->policy & engine_policy_cosmology);
+  const int with_rt = (e->policy & engine_policy_rt);
   const struct cosmology *cosmo = e->cosmology;
   const struct feedback_props *feedback_props = e->feedback_props;
   const float stars_h_max = e->hydro_properties->h_max;
@@ -240,9 +242,10 @@ void runner_do_stars_ghost(struct runner *r, struct cell *c, int timer) {
                     star_age_end_of_step - dt_enrichment;
 
                 /* Compute the stellar evolution  */
-                feedback_evolve_spart(sp, feedback_props, cosmo, us, phys_const,
-                                      star_age_beg_of_step, dt_enrichment,
-                                      e->time, ti_begin, with_cosmology);
+                feedback_prepare_feedback(sp, feedback_props, cosmo, us,
+                                          phys_const, star_age_beg_of_step,
+                                          dt_enrichment, e->time, ti_begin,
+                                          with_cosmology);
               } else {
 
                 /* Reset the feedback fields of the star particle */
@@ -315,6 +318,7 @@ void runner_do_stars_ghost(struct runner *r, struct cell *c, int timer) {
             /* Re-initialise everything */
             stars_init_spart(sp);
             feedback_init_spart(sp);
+            rt_init_spart(sp);
 
             /* Off we go ! */
             continue;
@@ -383,9 +387,9 @@ void runner_do_stars_ghost(struct runner *r, struct cell *c, int timer) {
                 star_age_end_of_step - dt_enrichment;
 
             /* Compute the stellar evolution  */
-            feedback_evolve_spart(sp, feedback_props, cosmo, us, phys_const,
-                                  star_age_beg_of_step, dt_enrichment, e->time,
-                                  ti_begin, with_cosmology);
+            feedback_prepare_feedback(sp, feedback_props, cosmo, us, phys_const,
+                                      star_age_beg_of_step, dt_enrichment,
+                                      e->time, ti_begin, with_cosmology);
           } else {
 
             /* Reset the feedback fields of the star particle */
@@ -395,6 +399,35 @@ void runner_do_stars_ghost(struct runner *r, struct cell *c, int timer) {
 
           /* Reset the feedback fields of the star particle */
           feedback_reset_feedback(sp, feedback_props);
+        }
+
+        if (with_rt) {
+
+          /* get star's age and time step for stellar emission rates */
+          const integertime_t ti_begin =
+              get_integer_time_begin(e->ti_current - 1, sp->time_bin);
+          const integertime_t ti_step = get_integer_timestep(sp->time_bin);
+
+          /* Get particle time-step */
+          double dt_star;
+          if (with_cosmology) {
+            dt_star = cosmology_get_delta_time(e->cosmology, ti_begin,
+                                               ti_begin + ti_step);
+          } else {
+            dt_star = get_timestep(sp->time_bin, e->time_base);
+          }
+
+          /* Calculate age of the star at current time */
+          double star_age_end_of_step;
+          if (with_cosmology) {
+            star_age_end_of_step = cosmology_get_delta_time_from_scale_factors(
+                e->cosmology, (double)sp->birth_scale_factor, e->cosmology->a);
+          } else {
+            star_age_end_of_step = e->time - (double)sp->birth_time;
+          }
+
+          rt_compute_stellar_emission_rate(sp, e->time, star_age_end_of_step,
+                                           dt_star);
         }
       }
 
@@ -845,9 +878,10 @@ void runner_do_black_holes_swallow_ghost(struct runner *r, struct cell *c,
                                    e->physical_constants, e->cosmology, dt);
 
         /* Compute variables required for the feedback loop */
-        black_holes_prepare_feedback(
-            bp, e->black_holes_properties, e->physical_constants, e->cosmology,
-            e->cooling_func, e->entropy_floor, e->time, with_cosmology, dt);
+        black_holes_prepare_feedback(bp, e->black_holes_properties,
+                                     e->physical_constants, e->cosmology,
+                                     e->cooling_func, e->entropy_floor, e->time,
+                                     with_cosmology, dt, e->ti_current);
       }
     }
   }
@@ -1096,10 +1130,10 @@ void runner_do_ghost(struct runner *r, struct cell *c, int timer) {
           if (((p->h >= hydro_h_max) && (f < 0.f)) ||
               ((p->h <= hydro_h_min) && (f > 0.f))) {
 
-          /* We have a particle whose smoothing length is already set (wants
-           * to be larger but has already hit the maximum OR wants to be
-           * smaller but has already reached the minimum). So, just tidy up
-           * as if the smoothing length had converged correctly  */
+            /* We have a particle whose smoothing length is already set (wants
+             * to be larger but has already hit the maximum OR wants to be
+             * smaller but has already reached the minimum). So, just tidy up
+             * as if the smoothing length had converged correctly  */
 
 #ifdef EXTRA_HYDRO_LOOP
 
@@ -1222,6 +1256,7 @@ void runner_do_ghost(struct runner *r, struct cell *c, int timer) {
             tracers_after_init(p, xp, e->internal_units, e->physical_constants,
                                with_cosmology, e->cosmology,
                                e->hydro_properties, e->cooling_func, e->time);
+            rt_init_part(p);
 
             /* Off we go ! */
             continue;
@@ -1384,4 +1419,38 @@ void runner_do_ghost(struct runner *r, struct cell *c, int timer) {
   }
 
   if (timer) TIMER_TOC(timer_do_ghost);
+}
+
+/**
+ * @brief Intermediate task after the injection to compute the total
+ * photon emission rates experienced by the hydro particles.
+ *
+ * @param r The runner thread.
+ * @param c The cell.
+ * @param timer Are we timing this ?
+ */
+void runner_do_rt_ghost1(struct runner *r, struct cell *c, int timer) {
+  /* const struct engine *e = r->e; */
+  int count = c->hydro.count;
+
+  /* Anything to do here? */
+  if (count == 0) return;
+
+  TIMER_TIC;
+
+  /* Recurse? */
+  if (c->split) {
+    for (int k = 0; k < 8; k++) {
+      if (c->progeny[k] != NULL) {
+        runner_do_rt_ghost1(r, c->progeny[k], 0);
+      }
+    }
+  }
+
+  for (int pid = 0; pid < count; pid++) {
+    struct part *restrict p = &(c->hydro.parts[pid]);
+    rt_injection_update_photon_density(p);
+  }
+
+  if (timer) TIMER_TOC(timer_do_rt_ghost1);
 }

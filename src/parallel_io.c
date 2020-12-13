@@ -56,6 +56,7 @@
 #include "output_options.h"
 #include "part.h"
 #include "part_type.h"
+#include "rt_io.h"
 #include "sink_io.h"
 #include "star_formation_io.h"
 #include "stars_io.h"
@@ -382,10 +383,11 @@ void read_array_parallel(hid_t grp, struct io_props props, size_t N,
  * @param N_total The total number of particles to write in this array.
  * @param snapshot_units The units used for the data in this snapshot.
  */
-void prepare_array_parallel(struct engine* e, hid_t grp, const char* fileName,
-                            FILE* xmfFile, char* partTypeGroupName,
-                            struct io_props props, long long N_total,
-                            const struct unit_system* snapshot_units) {
+void prepare_array_parallel(
+    struct engine* e, hid_t grp, const char* fileName, FILE* xmfFile,
+    char* partTypeGroupName, struct io_props props, long long N_total,
+    const enum lossy_compression_schemes lossy_compression,
+    const struct unit_system* snapshot_units) {
 
   /* Create data space */
   const hid_t h_space = H5Screate(H5S_SIMPLE);
@@ -417,21 +419,36 @@ void prepare_array_parallel(struct engine* e, hid_t grp, const char* fileName,
   if (h_err < 0)
     error("Error while changing data space shape for field '%s'.", props.name);
 
+  /* Dataset type */
+  hid_t h_type = H5Tcopy(io_hdf5_type(props.type));
+
+  /* Dataset properties */
+  hid_t h_prop = H5Pcreate(H5P_DATASET_CREATE);
+
   /* Create property list for collective dataset write.    */
   const hid_t h_plist_id = H5Pcreate(H5P_DATASET_XFER);
   H5Pset_dxpl_mpio(h_plist_id, H5FD_MPIO_COLLECTIVE);
 
   /* Set chunk size */
-  /* h_err = H5Pset_chunk(h_prop, rank, chunk_shape); */
-  /* if (h_err < 0) { */
-  /*   error("Error while setting chunk size (%llu, %llu) for field '%s'.", */
-  /*         chunk_shape[0], chunk_shape[1], props.name); */
-  /* } */
+  // h_err = H5Pset_chunk(h_prop, rank, chunk_shape);
+  // if (h_err < 0) {
+  //  error("Error while setting chunk size (%llu, %llu) for field '%s'.",
+  //        chunk_shape[0], chunk_shape[1], props.name);
+  //}
+
+  /* Are we imposing some form of lossy compression filter? */
+  // if (lossy_compression != compression_write_lossless)
+  //  set_hdf5_lossy_compression(&h_prop, &h_type, lossy_compression,
+  //  props.name);
+
+  /* Impose check-sum to verify data corruption */
+  // h_err = H5Pset_fletcher32(h_prop);
+  // if (h_err < 0)
+  //  error("Error while setting checksum options for field '%s'.", props.name);
 
   /* Create dataset */
-  const hid_t h_data =
-      H5Dcreate(grp, props.name, io_hdf5_type(props.type), h_space, H5P_DEFAULT,
-                H5P_DEFAULT, H5P_DEFAULT);
+  const hid_t h_data = H5Dcreate(grp, props.name, h_type, h_space, H5P_DEFAULT,
+                                 h_prop, H5P_DEFAULT);
   if (h_data < 0) error("Error while creating dataspace '%s'.", props.name);
 
   /* Write unit conversion factors for this data set */
@@ -475,6 +492,8 @@ void prepare_array_parallel(struct engine* e, hid_t grp, const char* fileName,
                    props.dimension, props.type);
 
   /* Close everything */
+  H5Tclose(h_type);
+  H5Pclose(h_prop);
   H5Pclose(h_plist_id);
   H5Dclose(h_data);
   H5Sclose(h_space);
@@ -734,7 +753,7 @@ void read_ic_parallel(char* fileName, const struct unit_system* internal_units,
                       int with_stars, int with_black_holes, int with_cosmology,
                       int cleanup_h, int cleanup_sqrt_a, double h, double a,
                       int mpi_rank, int mpi_size, MPI_Comm comm, MPI_Info info,
-                      int n_threads, int dry_run) {
+                      int n_threads, int dry_run, int remap_ids) {
 
   hid_t h_file = 0, h_grp = 0;
   /* GADGET has only cubic boxes (in cosmological mode) */
@@ -993,6 +1012,8 @@ void read_ic_parallel(char* fileName, const struct unit_system* internal_units,
         if (with_stars) {
           Nparticles = *Nstars;
           stars_read_particles(*sparts, list, &num_fields);
+          num_fields +=
+              star_formation_read_particles(*sparts, list + num_fields);
         }
         break;
 
@@ -1011,14 +1032,22 @@ void read_ic_parallel(char* fileName, const struct unit_system* internal_units,
 
     /* Read everything */
     if (!dry_run)
-      for (int i = 0; i < num_fields; ++i)
+      for (int i = 0; i < num_fields; ++i) {
+        /* If we are remapping ParticleIDs later, don't need to read them. */
+        if (remap_ids && strcmp(list[i].name, "ParticleIDs") == 0) continue;
+
+        /* Read array. */
         read_array_parallel(h_grp, list[i], Nparticles, N_total[ptype],
                             mpi_rank, offset[ptype], internal_units, ic_units,
                             cleanup_h, cleanup_sqrt_a, h, a);
+      }
 
     /* Close particle group */
     H5Gclose(h_grp);
   }
+
+  /* If we are remapping ParticleIDs later, start by setting them to 1. */
+  if (remap_ids) io_set_ids_to_one(*gparts, *Ngparts);
 
   if (!dry_run && with_gravity) {
 
@@ -1102,6 +1131,7 @@ void prepare_file(struct engine* e, const char* fileName,
 #else
   const int with_stf = 0;
 #endif
+  const int with_rt = e->policy & engine_policy_rt;
 
   FILE* xmfFile = 0;
   int numFiles = 1;
@@ -1146,6 +1176,16 @@ void prepare_file(struct engine* e, const char* fileName,
   io_write_attribute_s(h_grp, "Code", "SWIFT");
   io_write_attribute_s(h_grp, "RunName", e->run_name);
 
+  /* Write out the time-base */
+  if (with_cosmology) {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", e->time_base);
+    const double delta_t = cosmology_get_timebase(e->cosmology, e->ti_current);
+    io_write_attribute_d(h_grp, "TimeBase_dt", delta_t);
+  } else {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", 0);
+    io_write_attribute_d(h_grp, "TimeBase_dt", e->time_base);
+  }
+
   /* Store the time at which the snapshot was written */
   time_t tm = time(NULL);
   struct tm* timeinfo = localtime(&tm);
@@ -1169,6 +1209,8 @@ void prepare_file(struct engine* e, const char* fileName,
                      numParticlesHighWord, swift_type_count);
   double MassTable[6] = {0., 0., 0., 0., 0., 0.};
   io_write_attribute(h_grp, "MassTable", DOUBLE, MassTable, swift_type_count);
+  io_write_attribute(h_grp, "InitialMassTable", DOUBLE,
+                     e->s->initial_mean_mass_particles, swift_type_count);
   unsigned int flagEntropy[swift_type_count] = {0};
   flagEntropy[0] = writeEntropyFlag();
   io_write_attribute(h_grp, "Flag_Entropy_ICs", UINT, flagEntropy,
@@ -1224,7 +1266,8 @@ void prepare_file(struct engine* e, const char* fileName,
 
       case swift_type_gas:
         hydro_write_particles(parts, xparts, list, &num_fields);
-        num_fields += chemistry_write_particles(parts, list + num_fields);
+        num_fields += chemistry_write_particles(
+            parts, xparts, list + num_fields, with_cosmology);
         if (with_cooling || with_temperature) {
           num_fields += cooling_write_particles(
               parts, xparts, list + num_fields, e->cooling_func);
@@ -1239,6 +1282,9 @@ void prepare_file(struct engine* e, const char* fileName,
         if (with_stf) {
           num_fields +=
               velociraptor_write_parts(parts, xparts, list + num_fields);
+        }
+        if (with_rt) {
+          num_fields += rt_write_particles(parts, list + num_fields);
         }
         break;
 
@@ -1281,6 +1327,9 @@ void prepare_file(struct engine* e, const char* fileName,
         if (with_stf) {
           num_fields += velociraptor_write_sparts(sparts, list + num_fields);
         }
+        if (with_rt) {
+          num_fields += rt_write_stars(sparts, list + num_fields);
+        }
         break;
 
       case swift_type_black_hole:
@@ -1300,23 +1349,26 @@ void prepare_file(struct engine* e, const char* fileName,
 
     /* Did the user specify a non-standard default for the entire particle
      * type? */
-    const enum compression_levels compression_level_current_default =
-        output_options_get_ptype_default(output_options->select_output,
-                                         current_selection_name,
-                                         (enum part_type)ptype);
+    const enum lossy_compression_schemes compression_level_current_default =
+        output_options_get_ptype_default_compression(
+            output_options->select_output, current_selection_name,
+            (enum part_type)ptype, e->verbose);
 
     /* Prepare everything that is not cancelled */
     int num_fields_written = 0;
     for (int i = 0; i < num_fields; ++i) {
 
       /* Did the user cancel this field? */
-      const int should_write = output_options_should_write_field(
-          output_options, current_selection_name, list[i].name,
-          (enum part_type)ptype, compression_level_current_default);
+      const enum lossy_compression_schemes compression_level =
+          output_options_get_field_compression(
+              output_options, current_selection_name, list[i].name,
+              (enum part_type)ptype, compression_level_current_default,
+              e->verbose);
 
-      if (should_write) {
+      if (compression_level != compression_do_not_write) {
         prepare_array_parallel(e, h_grp, fileName, xmfFile, partTypeGroupName,
-                               list[i], N_total[ptype], snapshot_units);
+                               list[i], N_total[ptype], compression_level,
+                               snapshot_units);
         num_fields_written++;
       }
     }
@@ -1340,7 +1392,7 @@ void prepare_file(struct engine* e, const char* fileName,
 
 /**
  * @brief Writes an HDF5 output file (GADGET-3 type) with
- *its XMF descriptor
+ * its XMF descriptor
  *
  * @param e The engine containing all the system.
  * @param internal_units The #unit_system used internally
@@ -1383,6 +1435,7 @@ void write_output_parallel(struct engine* e,
 #else
   const int with_stf = 0;
 #endif
+  const int with_rt = e->policy & engine_policy_rt;
 
   /* Number of particles currently in the arrays */
   const size_t Ntot = e->s->nr_gparts;
@@ -1489,8 +1542,8 @@ void write_output_parallel(struct engine* e,
   }
 
   /* Write the location of the particles in the arrays */
-  io_write_cell_offsets(h_grp_cells, e->s->cdim, e->s->dim, e->s->pos_dithering,
-                        e->s->cells_top, e->s->nr_cells, e->s->width, mpi_rank,
+  io_write_cell_offsets(h_grp_cells, e->s->cdim, e->s->dim, e->s->cells_top,
+                        e->s->nr_cells, e->s->width, mpi_rank,
                         /*distributed=*/0, N_total, offset, numFields,
                         internal_units, snapshot_units);
 
@@ -1594,7 +1647,8 @@ void write_output_parallel(struct engine* e,
           /* No inhibted particles: easy case */
           Nparticles = Ngas;
           hydro_write_particles(parts, xparts, list, &num_fields);
-          num_fields += chemistry_write_particles(parts, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts, xparts, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields += cooling_write_particles(
                 parts, xparts, list + num_fields, e->cooling_func);
@@ -1610,6 +1664,9 @@ void write_output_parallel(struct engine* e,
               parts, xparts, list + num_fields, with_cosmology);
           num_fields +=
               star_formation_write_particles(parts, xparts, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts, list + num_fields);
+          }
 
         } else {
 
@@ -1633,8 +1690,8 @@ void write_output_parallel(struct engine* e,
           /* Select the fields to write */
           hydro_write_particles(parts_written, xparts_written, list,
                                 &num_fields);
-          num_fields +=
-              chemistry_write_particles(parts_written, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts_written, xparts_written, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields +=
                 cooling_write_particles(parts_written, xparts_written,
@@ -1652,6 +1709,9 @@ void write_output_parallel(struct engine* e,
               parts_written, xparts_written, list + num_fields, with_cosmology);
           num_fields += star_formation_write_particles(
               parts_written, xparts_written, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts_written, list + num_fields);
+          }
         }
       } break;
 
@@ -1792,6 +1852,10 @@ void write_output_parallel(struct engine* e,
           if (with_stf) {
             num_fields += velociraptor_write_sparts(sparts, list + num_fields);
           }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts, list + num_fields);
+          }
+
         } else {
 
           /* Ok, we need to fish out the particles we want */
@@ -1822,6 +1886,9 @@ void write_output_parallel(struct engine* e,
           if (with_stf) {
             num_fields +=
                 velociraptor_write_sparts(sparts_written, list + num_fields);
+          }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts_written, list + num_fields);
           }
         }
       } break;
@@ -1875,23 +1942,26 @@ void write_output_parallel(struct engine* e,
 
     /* Did the user specify a non-standard default for the entire particle
      * type? */
-    const enum compression_levels compression_level_current_default =
-        output_options_get_ptype_default(output_options->select_output,
-                                         current_selection_name,
-                                         (enum part_type)ptype);
+    const enum lossy_compression_schemes compression_level_current_default =
+        output_options_get_ptype_default_compression(
+            output_options->select_output, current_selection_name,
+            (enum part_type)ptype, e->verbose);
 
     /* Write everything that is not cancelled */
     for (int i = 0; i < num_fields; ++i) {
 
       /* Did the user cancel this field? */
-      const int should_write = output_options_should_write_field(
-          output_options, current_selection_name, list[i].name,
-          (enum part_type)ptype, compression_level_current_default);
+      const enum lossy_compression_schemes compression_level =
+          output_options_get_field_compression(
+              output_options, current_selection_name, list[i].name,
+              (enum part_type)ptype, compression_level_current_default,
+              e->verbose);
 
-      if (should_write)
+      if (compression_level != compression_do_not_write) {
         write_array_parallel(e, h_grp, fileName, partTypeGroupName, list[i],
                              Nparticles, N_total[ptype], mpi_rank,
                              offset[ptype], internal_units, snapshot_units);
+      }
     }
 
     /* Free temporary array */

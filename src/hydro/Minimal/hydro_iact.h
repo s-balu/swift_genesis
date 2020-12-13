@@ -24,7 +24,7 @@
  * @brief Minimal conservative implementation of SPH (Neighbour loop equations)
  *
  * The thermal variable is the internal energy (u). Simple constant
- * viscosity term without switches is implemented. No thermal conduction
+ * viscosity term with the Balsara (1995) switch. No thermal conduction
  * term is implemented.
  *
  * This corresponds to equations (43), (44), (45), (101), (103)  and (104) with
@@ -33,9 +33,8 @@
  */
 
 #include "adiabatic_index.h"
+#include "hydro_parameters.h"
 #include "minmax.h"
-
-#include "./hydro_parameters.h"
 
 /**
  * @brief Density interaction between two particles.
@@ -236,9 +235,13 @@ __attribute__((always_inline)) INLINE static void runner_iact_force(
   kernel_deval(xj, &wj, &wj_dx);
   const float wj_dr = hjd_inv * wj_dx;
 
+  /* Variable smoothing length term */
+  const float f_ij = 1.f - pi->force.f / mj;
+  const float f_ji = 1.f - pj->force.f / mi;
+
   /* Compute gradient terms */
-  const float P_over_rho2_i = pressurei / (rhoi * rhoi) * pi->force.f;
-  const float P_over_rho2_j = pressurej / (rhoj * rhoj) * pj->force.f;
+  const float P_over_rho2_i = pressurei / (rhoi * rhoi) * f_ij;
+  const float P_over_rho2_j = pressurej / (rhoj * rhoj) * f_ji;
 
   /* Compute dv dot r. */
   const float dvdr = (pi->v[0] - pj->v[0]) * dx[0] +
@@ -266,7 +269,8 @@ __attribute__((always_inline)) INLINE static void runner_iact_force(
   const float visc = -0.25f * v_sig * (balsara_i + balsara_j) * mu_ij / rho_ij;
 
   /* Convolve with the kernel */
-  const float visc_acc_term = 0.5f * visc * (wi_dr + wj_dr) * r_inv;
+  const float visc_acc_term =
+      0.5f * visc * (wi_dr * f_ij + wj_dr * f_ji) * r_inv;
 
   /* SPH acceleration term */
   const float sph_acc_term =
@@ -300,8 +304,8 @@ __attribute__((always_inline)) INLINE static void runner_iact_force(
   pj->u_dt += du_dt_j * mi;
 
   /* Get the time derivative for h. */
-  pi->force.h_dt -= mj * dvdr * r_inv / rhoj * wi_dr;
-  pj->force.h_dt -= mi * dvdr * r_inv / rhoi * wj_dr;
+  pi->force.h_dt -= mj * dvdr * r_inv / rhoj * wi_dr * f_ij;
+  pj->force.h_dt -= mi * dvdr * r_inv / rhoi * wj_dr * f_ji;
 
   /* Update the signal velocity. */
   pi->force.v_sig = max(pi->force.v_sig, v_sig);
@@ -340,7 +344,7 @@ __attribute__((always_inline)) INLINE static void runner_iact_nonsym_force(
   const float r = r2 * r_inv;
 
   /* Recover some data */
-  // const float mi = pi->mass;
+  const float mi = pi->mass;
   const float mj = pj->mass;
   const float rhoi = pi->rho;
   const float rhoj = pj->rho;
@@ -363,9 +367,13 @@ __attribute__((always_inline)) INLINE static void runner_iact_nonsym_force(
   kernel_deval(xj, &wj, &wj_dx);
   const float wj_dr = hjd_inv * wj_dx;
 
+  /* Variable smoothing length term */
+  const float f_ij = 1.f - pi->force.f / mj;
+  const float f_ji = 1.f - pj->force.f / mi;
+
   /* Compute gradient terms */
-  const float P_over_rho2_i = pressurei / (rhoi * rhoi) * pi->force.f;
-  const float P_over_rho2_j = pressurej / (rhoj * rhoj) * pj->force.f;
+  const float P_over_rho2_i = pressurei / (rhoi * rhoi) * f_ij;
+  const float P_over_rho2_j = pressurej / (rhoj * rhoj) * f_ji;
 
   /* Compute dv dot r. */
   const float dvdr = (pi->v[0] - pj->v[0]) * dx[0] +
@@ -393,7 +401,8 @@ __attribute__((always_inline)) INLINE static void runner_iact_nonsym_force(
   const float visc = -0.25f * v_sig * (balsara_i + balsara_j) * mu_ij / rho_ij;
 
   /* Convolve with the kernel */
-  const float visc_acc_term = 0.5f * visc * (wi_dr + wj_dr) * r_inv;
+  const float visc_acc_term =
+      0.5f * visc * (wi_dr * f_ij + wj_dr * f_ji) * r_inv;
 
   /* SPH acceleration term */
   const float sph_acc_term =
@@ -420,7 +429,7 @@ __attribute__((always_inline)) INLINE static void runner_iact_nonsym_force(
   pi->u_dt += du_dt_i * mj;
 
   /* Get the time derivative for h. */
-  pi->force.h_dt -= mj * dvdr * r_inv / rhoj * wi_dr;
+  pi->force.h_dt -= mj * dvdr * r_inv / rhoj * wi_dr * f_ij;
 
   /* Update the signal velocity. */
   pi->force.v_sig = max(pi->force.v_sig, v_sig);

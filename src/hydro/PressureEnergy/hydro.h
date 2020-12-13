@@ -42,13 +42,12 @@
 #include "dimension.h"
 #include "entropy_floor.h"
 #include "equation_of_state.h"
+#include "hydro_parameters.h"
 #include "hydro_properties.h"
 #include "hydro_space.h"
 #include "kernel_hydro.h"
 #include "minmax.h"
 #include "pressure_floor.h"
-
-#include "./hydro_parameters.h"
 
 #include <float.h>
 
@@ -300,27 +299,6 @@ __attribute__((always_inline)) INLINE static void hydro_set_mass(
     struct part *restrict p, float m) {
 
   p->mass = m;
-}
-
-/**
- * @brief Returns the velocities drifted to the current time of a particle.
- *
- * @param p The particle of interest
- * @param xp The extended data of the particle.
- * @param dt_kick_hydro The time (for hydro accelerations) since the last kick.
- * @param dt_kick_grav The time (for gravity accelerations) since the last kick.
- * @param v (return) The velocities at the current time.
- */
-__attribute__((always_inline)) INLINE static void hydro_get_drifted_velocities(
-    const struct part *restrict p, const struct xpart *xp, float dt_kick_hydro,
-    float dt_kick_grav, float v[3]) {
-
-  v[0] = xp->v_full[0] + p->a_hydro[0] * dt_kick_hydro +
-         xp->a_grav[0] * dt_kick_grav;
-  v[1] = xp->v_full[1] + p->a_hydro[1] * dt_kick_hydro +
-         xp->a_grav[1] * dt_kick_grav;
-  v[2] = xp->v_full[2] + p->a_hydro[2] * dt_kick_hydro +
-         xp->a_grav[2] * dt_kick_grav;
 }
 
 /**
@@ -918,9 +896,6 @@ __attribute__((always_inline)) INLINE static void hydro_first_init_part(
   xp->v_full[0] = p->v[0];
   xp->v_full[1] = p->v[1];
   xp->v_full[2] = p->v[2];
-  xp->a_grav[0] = 0.f;
-  xp->a_grav[1] = 0.f;
-  xp->a_grav[2] = 0.f;
   xp->u_full = p->u;
 
   hydro_reset_acceleration(p);
@@ -950,8 +925,9 @@ hydro_set_init_internal_energy(struct part *p, float u_init) {
  *
  * @param p The particle.
  * @param xp The extended particle data.
+ * @param time The simulation time.
  */
 __attribute__((always_inline)) INLINE static void hydro_remove_part(
-    const struct part *p, const struct xpart *xp) {}
+    const struct part *p, const struct xpart *xp, const double time) {}
 
 #endif /* SWIFT_PRESSURE_ENERGY_HYDRO_H */

@@ -96,6 +96,7 @@ int main(int argc, char *argv[]) {
   struct gravity_props gravity_properties;
   struct hydro_props hydro_properties;
   struct stars_props stars_properties;
+  struct sink_props sink_properties;
   struct feedback_props feedback_properties;
   struct entropy_floor_properties entropy_floor;
   struct black_holes_props black_holes_properties;
@@ -178,6 +179,7 @@ int main(int argc, char *argv[]) {
   int with_eagle = 0;
   int with_gear = 0;
   int with_line_of_sight = 0;
+  int with_rt = 0;
   int verbose = 0;
   int nr_threads = 1;
   int with_verbose_timers = 0;
@@ -243,6 +245,10 @@ int main(int argc, char *argv[]) {
                   "feedback events.",
                   NULL, 0, 0),
       OPT_BOOLEAN(0, "logger", &with_logger, "Run with the particle logger.",
+                  NULL, 0, 0),
+      OPT_BOOLEAN('R', "radiation", &with_rt,
+                  "Run with radiative transfer. Work in progress, currently "
+                  "has no effect.",
                   NULL, 0, 0),
 
       OPT_GROUP("  Simulation meta-options:\n"),
@@ -453,6 +459,13 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
+  if (with_sink && with_star_formation) {
+    printf(
+        "Error: The sink particles are not supposed to be run with star "
+        "formation.\n");
+    return 1;
+  }
+
   /* The CPU frequency is a long long, so we need to parse that ourselves. */
   if (cpufreqarg != NULL) {
     if (sscanf(cpufreqarg, "%llu", &cpufreq) != 1) {
@@ -500,14 +513,6 @@ int main(int argc, char *argv[]) {
       printf(
           "Error: Cannot perform FOF search without gravity, -g or -G must be "
           "chosen.\n");
-    return 1;
-  }
-
-  if (with_fof && !with_black_holes) {
-    if (myrank == 0)
-      printf(
-          "Error: Cannot perform FOF seeding without black holes being in use, "
-          "-B must be chosen.\n");
     return 1;
   }
 
@@ -560,6 +565,37 @@ int main(int argc, char *argv[]) {
     }
     return 1;
   }
+
+#ifdef RT_NONE
+  if (with_rt) {
+    error("Running with radiative transfer but compiled without it!");
+  }
+#else
+  if (with_rt && !with_hydro) {
+    error(
+        "Error: Cannot use radiative transfer without gas, --hydro must be "
+        "chosen\n");
+  }
+  if (with_rt && !with_stars) {
+    error(
+        "Error: Cannot use radiative transfer without stars, --stars must be "
+        "chosen\n");
+  }
+
+#ifndef GADGET2_SPH
+  /* Temporary, this dependency will be removed later */
+  error("Error: Cannot use radiative transfer without gadget2-sph for now\n");
+#endif
+#ifndef STARS_GEAR
+  /* Temporary, this dependency will be removed later */
+  error(
+      "Error: Cannot use radiative transfer without GEAR star model for now\n");
+#endif
+#ifdef WITH_MPI
+  /* Temporary, this will be removed in due time */
+  error("Error: Cannot use radiative transfer with MPI\n");
+#endif
+#endif /* idfef RT_NONE */
 
 /* Let's pin the main thread, now we know if affinity will be used. */
 #if defined(HAVE_SETAFFINITY) && defined(HAVE_LIBNUMA) && defined(_GNU_SOURCE)
@@ -876,7 +912,7 @@ int main(int argc, char *argv[]) {
 
     /* Prepare and verify the selection of outputs */
     io_prepare_output_fields(output_options, with_cosmology, with_fof,
-                             with_structure_finding);
+                             with_structure_finding, e.verbose);
 
     /* Not restarting so look for the ICs. */
     /* Initialize unit system and constants */
@@ -952,7 +988,8 @@ int main(int argc, char *argv[]) {
     /* Initialise the feedback properties */
     if (with_feedback) {
 #ifdef FEEDBACK_NONE
-      error("ERROR: Running with feedback but compiled without it.");
+      if (!with_rt)
+        error("ERROR: Running with feedback but compiled without it.");
 #endif
       feedback_props_init(&feedback_properties, &prog_const, &us, params,
                           &hydro_properties, &cosmo);
@@ -968,6 +1005,12 @@ int main(int argc, char *argv[]) {
                              &hydro_properties, &cosmo);
     } else
       bzero(&black_holes_properties, sizeof(struct black_holes_props));
+
+    /* Initialise the sink properties */
+    if (with_sink) {
+      sink_props_init(&sink_properties, &prog_const, &us, params, &cosmo);
+    } else
+      bzero(&sink_properties, sizeof(struct sink_props));
 
       /* Initialise the cooling function properties */
 #ifdef COOLING_NONE
@@ -995,8 +1038,8 @@ int main(int argc, char *argv[]) {
 #ifdef STAR_FORMATION_NONE
       error("ERROR: Running with star formation but compiled without it!");
 #endif
-      starformation_init(params, &prog_const, &us, &hydro_properties,
-                         &starform);
+      starformation_init(params, &prog_const, &us, &hydro_properties, &cosmo,
+                         &entropy_floor, &starform);
     }
     if (with_star_formation && myrank == 0) starformation_print(&starform);
 
@@ -1008,8 +1051,19 @@ int main(int argc, char *argv[]) {
     /* Initialise the FOF properties */
     bzero(&fof_properties, sizeof(struct fof_props));
 #ifdef WITH_FOF
-    if (with_fof)
+    if (with_fof) {
       fof_init(&fof_properties, params, &prog_const, &us, /*stand-alone=*/0);
+      if (fof_properties.seed_black_holes_enabled && !with_black_holes) {
+        if (myrank == 0)
+          printf(
+              "Error: Cannot perform FOF seeding without black holes being in "
+              "use\n");
+        return 1;
+      }
+    } else {
+      if (e.snapshot_invoke_fof)
+        error("Error: Must run with --fof if Snapshots::invoke_fof=1\n");
+    }
 #endif
 
     /* Be verbose about what happens next */
@@ -1035,15 +1089,15 @@ int main(int argc, char *argv[]) {
                      with_gravity, with_sink, with_stars, with_black_holes,
                      with_cosmology, cleanup_h, cleanup_sqrt_a, cosmo.h,
                      cosmo.a, myrank, nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL,
-                     nr_threads, dry_run);
+                     nr_threads, dry_run, remap_ids);
 #else
     read_ic_serial(ICfileName, &us, dim, &parts, &gparts, &sinks, &sparts,
                    &bparts, &Ngas, &Ngpart, &Ngpart_background, &Nsink, &Nspart,
                    &Nbpart, &flag_entropy_ICs, with_hydro, with_gravity,
                    with_sink, with_stars, with_black_holes, with_cosmology,
                    cleanup_h, cleanup_sqrt_a, cosmo.h, cosmo.a, myrank,
-                   nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL, nr_threads,
-                   dry_run);
+                   nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL, nr_threads, dry_run,
+                   remap_ids);
 #endif
 #else
     read_ic_single(ICfileName, &us, dim, &parts, &gparts, &sinks, &sparts,
@@ -1051,7 +1105,7 @@ int main(int argc, char *argv[]) {
                    &Nbpart, &flag_entropy_ICs, with_hydro, with_gravity,
                    with_sink, with_stars, with_black_holes, with_cosmology,
                    cleanup_h, cleanup_sqrt_a, cosmo.h, cosmo.a, nr_threads,
-                   dry_run);
+                   dry_run, remap_ids);
 #endif
 #endif
 
@@ -1090,7 +1144,7 @@ int main(int argc, char *argv[]) {
     /* Check that the other links are correctly set */
     if (!dry_run)
       part_verify_links(parts, gparts, sinks, sparts, bparts, Ngas, Ngpart,
-                        Nsink, Nspart, Nbpart, 1);
+                        Nsink, Nspart, Nbpart, /*verbose=*/1);
 #endif
 
     /* Get the total number of particles across all nodes. */
@@ -1279,7 +1333,8 @@ int main(int argc, char *argv[]) {
     if (with_fof) engine_policies |= engine_policy_fof;
     if (with_logger) engine_policies |= engine_policy_logger;
     if (with_line_of_sight) engine_policies |= engine_policy_line_of_sight;
-    if (with_sink) engine_policies |= engine_policy_sink;
+    if (with_sink) engine_policies |= engine_policy_sinks;
+    if (with_rt) engine_policies |= engine_policy_rt;
     if (with_density_grids) engine_policies |= engine_policy_produce_density_grids;
 
     /* Initialize the engine with the space and policies. */
@@ -1290,7 +1345,7 @@ int main(int argc, char *argv[]) {
                 N_total[swift_type_dark_matter_background], engine_policies,
                 talking, &reparttype, &us, &prog_const, &cosmo,
                 &hydro_properties, &entropy_floor, &gravity_properties,
-                &stars_properties, &black_holes_properties,
+                &stars_properties, &black_holes_properties, &sink_properties,
                 &feedback_properties, &mesh, &potential, &cooling_func,
                 &starform, &chemistry, &fof_properties, &los_properties);
     engine_config(/*restart=*/0, /*fof=*/0, &e, params, nr_nodes, myrank,
@@ -1366,12 +1421,20 @@ int main(int argc, char *argv[]) {
     /* Write the state of the system before starting time integration. */
 #ifdef WITH_LOGGER
     if (e.policy & engine_policy_logger) {
-      logger_log_all(e.logger, &e);
+      logger_log_all_particles(e.logger, &e);
       engine_dump_index(&e);
     }
 #endif
     /* Dump initial state snapshot, if not working with an output list */
-    if (!e.output_list_snapshots) engine_dump_snapshot(&e);
+    if (!e.output_list_snapshots) {
+
+      /* Run FoF first, if we're adding FoF info to the snapshot */
+      if (with_fof && e.snapshot_invoke_fof) {
+        engine_fof(&e, /*dump_results=*/0, /*seed_black_holes=*/0);
+      }
+
+      engine_dump_snapshot(&e);
+    }
 
     /* Dump initial state statistics, if not working with an output list */
     if (!e.output_list_stats) engine_print_stats(&e);
@@ -1382,10 +1445,12 @@ int main(int argc, char *argv[]) {
 
   /* Legend */
   if (myrank == 0) {
-    printf("# %6s %14s %12s %12s %14s %9s %12s %12s %12s %12s %16s [%s] %6s\n",
-           "Step", "Time", "Scale-factor", "Redshift", "Time-step", "Time-bins",
-           "Updates", "g-Updates", "s-Updates", "b-Updates", "Wall-clock time",
-           clocks_getunit(), "Props");
+    printf(
+        "# %6s %14s %12s %12s %14s %9s %12s %12s %12s %12s %12s %16s [%s] "
+        "%6s\n",
+        "Step", "Time", "Scale-factor", "Redshift", "Time-step", "Time-bins",
+        "Updates", "g-Updates", "s-Updates", "sink-Updates", "b-Updates",
+        "Wall-clock time", clocks_getunit(), "Props");
     fflush(stdout);
   }
 
@@ -1406,7 +1471,7 @@ int main(int argc, char *argv[]) {
     parser_write_params_to_file(params, "unused_parameters.yml", /*used=*/0);
   }
 
-    /* Dump memory use report if collected for the 0 step. */
+  /* Dump memory use report if collected for the 0 step. */
 #ifdef SWIFT_MEMUSE_REPORTS
   {
     char dumpfile[40];
@@ -1419,7 +1484,7 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-    /* Dump MPI requests if collected. */
+  /* Dump MPI requests if collected. */
 #if defined(SWIFT_MPIUSE_REPORTS) && defined(WITH_MPI)
   {
     char dumpfile[40];
@@ -1483,7 +1548,7 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-      /* Dump memory use report if collected. */
+    /* Dump memory use report if collected. */
 #ifdef SWIFT_MEMUSE_REPORTS
     {
       char dumpfile[40];
@@ -1497,11 +1562,11 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-      /* Dump MPI requests if collected. */
+    /* Dump MPI requests if collected. */
 #if defined(SWIFT_MPIUSE_REPORTS) && defined(WITH_MPI)
     {
-      char dumpfile[40];
-      snprintf(dumpfile, 40, "mpiuse_report-rank%d-step%d.dat", engine_rank,
+      char dumpfile[80];
+      snprintf(dumpfile, 80, "mpiuse_report-rank%d-step%d.dat", engine_rank,
                j + 1);
       mpiuse_log_dump(dumpfile, e.tic_step);
     }
@@ -1510,12 +1575,12 @@ int main(int argc, char *argv[]) {
 #ifdef SWIFT_DEBUG_THREADPOOL
     /* Dump the task data using the given frequency. */
     if (dump_threadpool && (dump_threadpool == 1 || j % dump_threadpool == 1)) {
-      char dumpfile[40];
+      char dumpfile[80];
 #ifdef WITH_MPI
-      snprintf(dumpfile, 40, "threadpool_info-rank%d-step%d.dat", engine_rank,
+      snprintf(dumpfile, 80, "threadpool_info-rank%d-step%d.dat", engine_rank,
                j + 1);
 #else
-      snprintf(dumpfile, 40, "threadpool_info-step%d.dat", j + 1);
+      snprintf(dumpfile, 80, "threadpool_info-step%d.dat", j + 1);
 #endif  // WITH_MPI
       threadpool_dump_log(&e.threadpool, dumpfile, 1);
     } else {
@@ -1529,19 +1594,21 @@ int main(int argc, char *argv[]) {
 
     /* Print some information to the screen */
     printf(
-        "  %6d %14e %12.7f %12.7f %14e %4d %4d %12lld %12lld %12lld %12lld"
+        "  %6d %14e %12.7f %12.7f %14e %4d %4d %12lld %12lld %12lld %12lld "
+        "%12lld"
         " %21.3f %6d\n",
         e.step, e.time, e.cosmology->a, e.cosmology->z, e.time_step,
         e.min_active_bin, e.max_active_bin, e.updates, e.g_updates, e.s_updates,
-        e.b_updates, e.wallclock_time, e.step_props);
+        e.sink_updates, e.b_updates, e.wallclock_time, e.step_props);
     fflush(stdout);
 
     fprintf(e.file_timesteps,
             "  %6d %14e %12.7f %12.7f %14e %4d %4d %12lld %12lld %12lld %12lld"
-            " %21.3f %6d\n",
+            " %12lld %21.3f %6d\n",
             e.step, e.time, e.cosmology->a, e.cosmology->z, e.time_step,
             e.min_active_bin, e.max_active_bin, e.updates, e.g_updates,
-            e.s_updates, e.b_updates, e.wallclock_time, e.step_props);
+            e.s_updates, e.sink_updates, e.b_updates, e.wallclock_time,
+            e.step_props);
     fflush(e.file_timesteps);
 
     /* Print information to the SFH logger */
@@ -1552,7 +1619,7 @@ int main(int argc, char *argv[]) {
   }
 
   /* Write final output. */
-  if (!force_stop) {
+  if (!force_stop && nsteps == -2) {
 
     /* Move forward in time */
     e.ti_old = e.ti_current;
@@ -1572,7 +1639,7 @@ int main(int argc, char *argv[]) {
     }
 #ifdef WITH_LOGGER
     if (e.policy & engine_policy_logger) {
-      logger_log_all(e.logger, &e);
+      logger_log_all_particles(e.logger, &e);
 
       /* Write a final index file */
       engine_dump_index(&e);
@@ -1586,6 +1653,11 @@ int main(int argc, char *argv[]) {
     /* Write final snapshot? */
     if ((e.output_list_snapshots && e.output_list_snapshots->final_step_dump) ||
         !e.output_list_snapshots) {
+
+      if (with_fof && e.snapshot_invoke_fof) {
+        engine_fof(&e, /*dump_results=*/0, /*seed_black_holes=*/0);
+      }
+
 #ifdef HAVE_VELOCIRAPTOR
       if (with_structure_finding && e.snapshot_invoke_stf &&
           !e.stf_this_timestep)
@@ -1599,7 +1671,7 @@ int main(int argc, char *argv[]) {
 #endif
     }
 
-      /* Write final stf? */
+    /* Write final stf? */
 #ifdef HAVE_VELOCIRAPTOR
     if (with_structure_finding && e.output_list_stf) {
       if (e.output_list_stf->final_step_dump && !e.stf_this_timestep)

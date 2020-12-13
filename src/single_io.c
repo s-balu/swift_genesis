@@ -48,12 +48,14 @@
 #include "gravity_properties.h"
 #include "hydro_io.h"
 #include "hydro_properties.h"
+#include "io_compression.h"
 #include "io_properties.h"
 #include "memuse.h"
 #include "output_list.h"
 #include "output_options.h"
 #include "part.h"
 #include "part_type.h"
+#include "rt_io.h"
 #include "sink_io.h"
 #include "star_formation_io.h"
 #include "stars_io.h"
@@ -234,6 +236,7 @@ void read_array_single(hid_t h_grp, const struct io_props props, size_t N,
 void write_array_single(const struct engine* e, hid_t grp, char* fileName,
                         FILE* xmfFile, char* partTypeGroupName,
                         const struct io_props props, size_t N,
+                        const enum lossy_compression_schemes lossy_compression,
                         const struct unit_system* internal_units,
                         const struct unit_system* snapshot_units) {
 
@@ -257,7 +260,7 @@ void write_array_single(const struct engine* e, hid_t grp, char* fileName,
     error("Error while creating data space for field '%s'.", props.name);
 
   /* Decide what chunk size to use based on compression */
-  int log2_chunk_size = e->snapshot_compression > 0 ? 12 : 18;
+  int log2_chunk_size = 20;
 
   int rank;
   hsize_t shape[2];
@@ -285,8 +288,11 @@ void write_array_single(const struct engine* e, hid_t grp, char* fileName,
   if (h_err < 0)
     error("Error while changing data space shape for field '%s'.", props.name);
 
+  /* Dataset type */
+  hid_t h_type = H5Tcopy(io_hdf5_type(props.type));
+
   /* Dataset properties */
-  const hid_t h_prop = H5Pcreate(H5P_DATASET_CREATE);
+  hid_t h_prop = H5Pcreate(H5P_DATASET_CREATE);
 
   /* Set chunk size */
   h_err = H5Pset_chunk(h_prop, rank, chunk_shape);
@@ -294,12 +300,11 @@ void write_array_single(const struct engine* e, hid_t grp, char* fileName,
     error("Error while setting chunk size (%llu, %llu) for field '%s'.",
           chunk_shape[0], chunk_shape[1], props.name);
 
-  /* Impose check-sum to verify data corruption */
-  h_err = H5Pset_fletcher32(h_prop);
-  if (h_err < 0)
-    error("Error while setting checksum options for field '%s'.", props.name);
+  /* Are we imposing some form of lossy compression filter? */
+  if (lossy_compression != compression_write_lossless)
+    set_hdf5_lossy_compression(&h_prop, &h_type, lossy_compression, props.name);
 
-  /* Impose data compression */
+  /* Impose GZIP data compression */
   if (e->snapshot_compression > 0) {
     h_err = H5Pset_shuffle(h_prop);
     if (h_err < 0)
@@ -312,9 +317,14 @@ void write_array_single(const struct engine* e, hid_t grp, char* fileName,
             props.name);
   }
 
+  /* Impose check-sum to verify data corruption */
+  h_err = H5Pset_fletcher32(h_prop);
+  if (h_err < 0)
+    error("Error while setting checksum options for field '%s'.", props.name);
+
   /* Create dataset */
-  const hid_t h_data = H5Dcreate(grp, props.name, io_hdf5_type(props.type),
-                                 h_space, H5P_DEFAULT, h_prop, H5P_DEFAULT);
+  const hid_t h_data = H5Dcreate(grp, props.name, h_type, h_space, H5P_DEFAULT,
+                                 h_prop, H5P_DEFAULT);
   if (h_data < 0) error("Error while creating dataspace '%s'.", props.name);
 
   /* Write temporary buffer to HDF5 dataspace */
@@ -364,6 +374,7 @@ void write_array_single(const struct engine* e, hid_t grp, char* fileName,
 
   /* Free and close everything */
   swift_free("writebuff", temp);
+  H5Tclose(h_type);
   H5Pclose(h_prop);
   H5Dclose(h_data);
   H5Sclose(h_space);
@@ -418,7 +429,7 @@ void read_ic_single(const char* fileName,
                     int with_gravity, int with_sink, int with_stars,
                     int with_black_holes, int with_cosmology, int cleanup_h,
                     int cleanup_sqrt_a, double h, double a, int n_threads,
-                    int dry_run) {
+                    int dry_run, int remap_ids) {
 
   hid_t h_file = 0, h_grp = 0;
   /* GADGET has only cubic boxes (in cosmological mode) */
@@ -665,6 +676,8 @@ void read_ic_single(const char* fileName,
         if (with_stars) {
           Nparticles = *Nstars;
           stars_read_particles(*sparts, list, &num_fields);
+          num_fields +=
+              star_formation_read_particles(*sparts, list + num_fields);
         }
         break;
 
@@ -681,13 +694,21 @@ void read_ic_single(const char* fileName,
 
     /* Read everything */
     if (!dry_run)
-      for (int i = 0; i < num_fields; ++i)
+      for (int i = 0; i < num_fields; ++i) {
+        /* If we are remapping ParticleIDs later, don't need to read them. */
+        if (remap_ids && strcmp(list[i].name, "ParticleIDs") == 0) continue;
+
+        /* Read array. */
         read_array_single(h_grp, list[i], Nparticles, internal_units, ic_units,
                           cleanup_h, cleanup_sqrt_a, h, a);
+      }
 
     /* Close particle group */
     H5Gclose(h_grp);
   }
+
+  /* If we are remapping ParticleIDs later, start by setting them to 1. */
+  if (remap_ids) io_set_ids_to_one(*gparts, *Ngparts);
 
   /* Duplicate the parts for gravity */
   if (!dry_run && with_gravity) {
@@ -775,6 +796,7 @@ void write_output_single(struct engine* e,
 #else
   const int with_stf = 0;
 #endif
+  const int with_rt = e->policy & engine_policy_rt;
 
   /* Number of particles currently in the arrays */
   const size_t Ntot = e->s->nr_gparts;
@@ -810,7 +832,7 @@ void write_output_single(struct engine* e,
   /* Format things in a Gadget-friendly array */
   long long N_total[swift_type_count] = {
       (long long)Ngas_written,   (long long)Ndm_written,
-      (long long)Ndm_background, (long long)Nsinks,
+      (long long)Ndm_background, (long long)Nsinks_written,
       (long long)Nstars_written, (long long)Nblackholes_written};
 
   /* File name */
@@ -871,6 +893,16 @@ void write_output_single(struct engine* e,
   io_write_attribute_s(h_grp, "Code", "SWIFT");
   io_write_attribute_s(h_grp, "RunName", e->run_name);
 
+  /* Write out the time-base */
+  if (with_cosmology) {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", e->time_base);
+    const double delta_t = cosmology_get_timebase(e->cosmology, e->ti_current);
+    io_write_attribute_d(h_grp, "TimeBase_dt", delta_t);
+  } else {
+    io_write_attribute_d(h_grp, "TimeBase_dloga", 0);
+    io_write_attribute_d(h_grp, "TimeBase_dt", e->time_base);
+  }
+
   /* Store the time at which the snapshot was written */
   time_t tm = time(NULL);
   struct tm* timeinfo = localtime(&tm);
@@ -901,6 +933,8 @@ void write_output_single(struct engine* e,
                      numParticlesHighWord, swift_type_count);
   double MassTable[swift_type_count] = {0};
   io_write_attribute(h_grp, "MassTable", DOUBLE, MassTable, swift_type_count);
+  io_write_attribute(h_grp, "InitialMassTable", DOUBLE,
+                     e->s->initial_mean_mass_particles, swift_type_count);
   unsigned int flagEntropy[swift_type_count] = {0};
   flagEntropy[0] = writeEntropyFlag();
   io_write_attribute(h_grp, "Flag_Entropy_ICs", UINT, flagEntropy,
@@ -922,8 +956,8 @@ void write_output_single(struct engine* e,
   if (h_grp < 0) error("Error while creating cells group");
 
   /* Write the location of the particles in the arrays */
-  io_write_cell_offsets(h_grp, e->s->cdim, e->s->dim, e->s->pos_dithering,
-                        e->s->cells_top, e->s->nr_cells, e->s->width, e->nodeID,
+  io_write_cell_offsets(h_grp, e->s->cdim, e->s->dim, e->s->cells_top,
+                        e->s->nr_cells, e->s->width, e->nodeID,
                         /*distributed=*/0, N_total, global_offsets, numFields,
                         internal_units, snapshot_units);
   H5Gclose(h_grp);
@@ -979,7 +1013,8 @@ void write_output_single(struct engine* e,
           /* No inhibted particles: easy case */
           N = Ngas;
           hydro_write_particles(parts, xparts, list, &num_fields);
-          num_fields += chemistry_write_particles(parts, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts, xparts, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields += cooling_write_particles(
                 parts, xparts, list + num_fields, e->cooling_func);
@@ -995,6 +1030,9 @@ void write_output_single(struct engine* e,
               parts, xparts, list + num_fields, with_cosmology);
           num_fields +=
               star_formation_write_particles(parts, xparts, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts, list + num_fields);
+          }
 
         } else {
 
@@ -1018,8 +1056,8 @@ void write_output_single(struct engine* e,
           /* Select the fields to write */
           hydro_write_particles(parts_written, xparts_written, list,
                                 &num_fields);
-          num_fields +=
-              chemistry_write_particles(parts_written, list + num_fields);
+          num_fields += chemistry_write_particles(
+              parts_written, xparts_written, list + num_fields, with_cosmology);
           if (with_cooling || with_temperature) {
             num_fields +=
                 cooling_write_particles(parts_written, xparts_written,
@@ -1037,6 +1075,9 @@ void write_output_single(struct engine* e,
               parts_written, xparts_written, list + num_fields, with_cosmology);
           num_fields += star_formation_write_particles(
               parts_written, xparts_written, list + num_fields);
+          if (with_rt) {
+            num_fields += rt_write_particles(parts_written, list + num_fields);
+          }
         }
       } break;
 
@@ -1172,6 +1213,9 @@ void write_output_single(struct engine* e,
           if (with_stf) {
             num_fields += velociraptor_write_sparts(sparts, list + num_fields);
           }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts, list + num_fields);
+          }
         } else {
 
           /* Ok, we need to fish out the particles we want */
@@ -1202,6 +1246,9 @@ void write_output_single(struct engine* e,
           if (with_stf) {
             num_fields +=
                 velociraptor_write_sparts(sparts_written, list + num_fields);
+          }
+          if (with_rt) {
+            num_fields += rt_write_stars(sparts_written, list + num_fields);
           }
         }
       } break;
@@ -1256,23 +1303,26 @@ void write_output_single(struct engine* e,
 
     /* Did the user specify a non-standard default for the entire particle
      * type? */
-    const enum compression_levels compression_level_current_default =
-        output_options_get_ptype_default(output_options->select_output,
-                                         current_selection_name,
-                                         (enum part_type)ptype);
+    const enum lossy_compression_schemes compression_level_current_default =
+        output_options_get_ptype_default_compression(
+            output_options->select_output, current_selection_name,
+            (enum part_type)ptype, e->verbose);
 
     /* Write everything that is not cancelled */
     int num_fields_written = 0;
     for (int i = 0; i < num_fields; ++i) {
 
       /* Did the user cancel this field? */
-      const int should_write = output_options_should_write_field(
-          output_options, current_selection_name, list[i].name,
-          (enum part_type)ptype, compression_level_current_default);
+      const enum lossy_compression_schemes compression_level =
+          output_options_get_field_compression(
+              output_options, current_selection_name, list[i].name,
+              (enum part_type)ptype, compression_level_current_default,
+              e->verbose);
 
-      if (should_write) {
+      if (compression_level != compression_do_not_write) {
         write_array_single(e, h_grp, fileName, xmfFile, partTypeGroupName,
-                           list[i], N, internal_units, snapshot_units);
+                           list[i], N, compression_level, internal_units,
+                           snapshot_units);
         num_fields_written++;
       }
     }

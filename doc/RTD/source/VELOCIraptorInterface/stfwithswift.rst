@@ -18,20 +18,22 @@ Setting up VELOCIraptor
 -----------------------
 
 Before we can run SWIFT with VELOCIraptor we first need to download
-VELOCIraptor. This can be done by cloning the repository on GitHub_::
+VELOCIraptor. This can be done by cloning the repository on GitHub::
 
-  git clone https://github.com/pelahi/VELOCIraptor-STF
+  git clone https://github.com/ICRAR/VELOCIraptor-STF.git
 
 The SWIFT interface is in the master branch of VELOCIraptor so nothing is more
 is needed besides fetching the latest version of the `NBodyLib` that the code
 relies upon::
   
   cd VELOCIraptor-STF 
-  git fetch 
+  git submodule update --init --recursive
 
 To get VELOCIraptor working with SWIFT simply use::
 
-  cmake . -DVR_USE_HYDRO=ON -DVR_USE_SWIFT_INTERFACE=ON -DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_BUILD_TYPE=Release 
+  mkdir build
+  cd build
+  cmake ../ -DVR_USE_HYDRO=ON -DVR_USE_SWIFT_INTERFACE=ON -DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_BUILD_TYPE=Release 
 
 The first parameter activates the processing of gas, stars and black holes. It
 can be omitted for simulations evolving only dark matter.
@@ -54,7 +56,7 @@ HDF5 library, not a parallel build.
 Compiling SWIFT
 ---------------
 The next part is compiling SWIFT with VELOCIraptor and assumes you already
-downloaded SWIFT from the GitLab_, this can be done by running
+downloaded SWIFT from the GitLab repository. This can be done by running
 
 .. code:: bash
   
@@ -88,5 +90,4 @@ finder as::
 Which activates the VELOCIraptor interface.
 
 
-.. _GitHub: https://github.com/pelahi/VELOCIraptor-STF
 .. _GitLab: https://gitlab.cosma.dur.ac.uk/swift/swiftsim

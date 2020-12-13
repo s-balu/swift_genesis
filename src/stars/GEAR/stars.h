@@ -19,16 +19,25 @@
 #ifndef SWIFT_GEAR_STARS_H
 #define SWIFT_GEAR_STARS_H
 
-#include <float.h>
 #include "minmax.h"
 
+#include <float.h>
+
 /**
- * @brief Computes the gravity time-step of a given star particle.
+ * @brief Computes the time-step length of a given star particle from star
+ * physics
  *
  * @param sp Pointer to the s-particle data.
+ * @param stars_properties Properties of the stars model.
+ * @param with_cosmology Are we running with cosmological time integration.
+ * @param cosmo The current cosmological model (used if running with
+ * cosmology).
+ * @param time The current time (used if running without cosmology).
  */
 __attribute__((always_inline)) INLINE static float stars_compute_timestep(
-    const struct spart* const sp) {
+    const struct spart* const sp, const struct stars_props* stars_properties,
+    const int with_cosmology, const struct cosmology* cosmo,
+    const double time) {
 
   return FLT_MAX;
 }
@@ -68,8 +77,6 @@ __attribute__((always_inline)) INLINE static void stars_first_init_spart(
     const int with_cosmology, const double scale_factor, const double time) {
 
   sp->time_bin = 0;
-  sp->sf_data.birth_density = 0.f;
-  // sp->birth_time = 0.;
 
   stars_init_spart(sp);
 }

@@ -17,14 +17,13 @@
  *
  ******************************************************************************/
 #include "../config.h"
+#include "swift.h"
+#include "timestep_limiter_iact.h"
 
 #include <fenv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "swift.h"
-#include "timestep_limiter_iact.h"
 
 void print_bytes(void *p, size_t len) {
   printf("(");
@@ -47,6 +46,8 @@ void test(void) {
   /* Start with some values for the cosmological parameters */
   const float a = (float)random_uniform(0.8, 1.);
   const float H = 1.f;
+  const integertime_t ti_current = 1;
+  const double time_base = 1e-5;
 
   /* Create two random particles (don't do this at home !) */
   struct part pi, pj;
@@ -184,7 +185,7 @@ void test(void) {
     error("Particles 'pj' do not match after density (byte = %d)", j_not_ok);
   }
 
-    /* --- Test the gradient loop --- */
+  /* --- Test the gradient loop --- */
 #ifdef EXTRA_HYDRO_LOOP
 
   /* Call the symmetric version */
@@ -220,15 +221,23 @@ void test(void) {
 
   /* Call the symmetric version */
   runner_iact_force(r2, dx, pi.h, pj.h, &pi, &pj, a, H);
+  runner_iact_diffusion(r2, dx, pi.h, pj.h, &pi, &pj, a, H, time_base,
+                        ti_current, NULL, /*with_cosmology=*/0);
   runner_iact_timebin(r2, dx, pi.h, pj.h, &pi, &pj, a, H);
 
   /* Call the non-symmetric version */
   runner_iact_nonsym_force(r2, dx, pi2.h, pj2.h, &pi2, &pj2, a, H);
+  runner_iact_nonsym_diffusion(r2, dx, pi2.h, pj2.h, &pi2, &pj2, a, H,
+                               time_base, ti_current, NULL,
+                               /*with_cosmology=*/0);
   runner_iact_nonsym_timebin(r2, dx, pi2.h, pj2.h, &pi2, &pj2, a, H);
   dx[0] = -dx[0];
   dx[1] = -dx[1];
   dx[2] = -dx[2];
   runner_iact_nonsym_force(r2, dx, pj2.h, pi2.h, &pj2, &pi2, a, H);
+  runner_iact_nonsym_diffusion(r2, dx, pj2.h, pi2.h, &pj2, &pi2, a, H,
+                               time_base, ti_current, NULL,
+                               /*with_cosmology=*/0);
   runner_iact_nonsym_timebin(r2, dx, pj2.h, pi2.h, &pj2, &pi2, a, H);
 
 /* Check that the particles are the same */

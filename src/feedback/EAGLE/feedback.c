@@ -25,6 +25,7 @@
 #include "imf.h"
 #include "inline.h"
 #include "interpolate.h"
+#include "random.h"
 #include "timers.h"
 #include "yield_tables.h"
 
@@ -129,7 +130,7 @@ double eagle_feedback_number_of_sampled_SNII(const struct spart* sp,
     /* The max dying star mass is also below the SNII mass window */
     else {
 
-    /* We already excluded this at the star of the function */
+      /* We already excluded this at the star of the function */
 #ifdef SWIFT_DEBUG_CHECKS
       error("Error in the logic");
 #endif
@@ -139,7 +140,7 @@ double eagle_feedback_number_of_sampled_SNII(const struct spart* sp,
   /* The min dying star mass dies above the SNII mass window */
   else {
 
-  /* We already excluded this at the star of the function */
+    /* We already excluded this at the star of the function */
 #ifdef SWIFT_DEBUG_CHECKS
     error("Error in the logic");
 #endif
@@ -222,9 +223,15 @@ double eagle_feedback_number_of_SNIa(const double M_init, const double t0,
  *
  * @param sp The #spart.
  * @param props The properties of the feedback model.
+ * @param ngb_nH_cgs Hydrogen number density of the gas surrounding the star
+ * (physical cgs units).
+ * @param ngb_Z Metallicity (metal mass fraction) of the gas surrounding the
+ * star.
  */
 double eagle_feedback_energy_fraction(const struct spart* sp,
-                                      const struct feedback_props* props) {
+                                      const struct feedback_props* props,
+                                      const double ngb_nH_cgs,
+                                      const double ngb_Z) {
 
   /* Model parameters */
   const double f_E_max = props->f_E_max;
@@ -234,18 +241,22 @@ double eagle_feedback_energy_fraction(const struct spart* sp,
   const double n_Z = props->n_Z;
   const double n_n = props->n_n;
 
-  /* Star properties */
-
   /* Metallicity (metal mass fraction) at birth time of the star */
-  const double Z = chemistry_get_total_metal_mass_fraction_for_feedback(sp);
+  const double Z_birth =
+      chemistry_get_star_total_metal_mass_fraction_for_feedback(sp);
 
   /* Physical density of the gas at the star's birth time */
-  const double rho_birth = sp->sf_data.birth_density;
-  const double n_birth = rho_birth * props->rho_to_n_cgs;
+  const double rho_birth = sp->birth_density;
+  const double n_birth_cgs = rho_birth * props->rho_to_n_cgs;
+
+  /* Choose either the birth properties or current properties */
+  const double nH =
+      props->use_birth_density_for_f_th ? n_birth_cgs : ngb_nH_cgs;
+  const double Z = props->use_birth_Z_for_f_th ? Z_birth : ngb_Z;
 
   /* Calculate f_E */
   const double Z_term = pow(max(Z, 1e-6) / Z_0, n_Z);
-  const double n_term = pow(n_birth / n_0, -n_n);
+  const double n_term = pow(nH / n_0, -n_n);
   const double denonimator = 1. + Z_term * n_term;
 
   return f_E_min + (f_E_max - f_E_min) / denonimator;
@@ -261,7 +272,14 @@ double eagle_feedback_energy_fraction(const struct spart* sp,
  * @param sp The star particle.
  * @param star_age Age of star at the beginning of the step in internal units.
  * @param dt Length of time-step in internal units.
- * @param ngb_gas_mass Total un-weighted mass in the star's kernel.
+ * @param ngb_gas_mass Total un-weighted mass in the star's kernel (internal
+ * units)
+ * @param num_gas_ngbs Total (integer) number of gas neighbours within the
+ * star's kernel.
+ * @param ngb_nH_cgs Hydrogen number density of the gas surrounding the star
+ * (physical cgs units).
+ * @param ngb_Z Metallicity (metal mass fraction) of the gas surrounding the
+ * star.
  * @param feedback_props The properties of the feedback model.
  * @param min_dying_mass_Msun Minimal star mass dying this step (in solar
  * masses).
@@ -270,8 +288,10 @@ double eagle_feedback_energy_fraction(const struct spart* sp,
  */
 INLINE static void compute_SNII_feedback(
     struct spart* sp, const double star_age, const double dt,
-    const float ngb_gas_mass, const struct feedback_props* feedback_props,
-    const double min_dying_mass_Msun, const double max_dying_mass_Msun) {
+    const int ngb_gas_N, const float ngb_gas_mass, const double ngb_nH_cgs,
+    const double ngb_Z, const struct feedback_props* feedback_props,
+    const double min_dying_mass_Msun, const double max_dying_mass_Msun,
+    const integertime_t ti_begin) {
 
   /* Are we sampling the delay function or using a fixed delay? */
   const int SNII_sampled_delay = feedback_props->SNII_sampled_delay;
@@ -300,7 +320,8 @@ INLINE static void compute_SNII_feedback(
     const double delta_T =
         eagle_feedback_temperature_change(sp, feedback_props);
     const double E_SNe = feedback_props->E_SNII;
-    const double f_E = eagle_feedback_energy_fraction(sp, feedback_props);
+    const double f_E =
+        eagle_feedback_energy_fraction(sp, feedback_props, ngb_nH_cgs, ngb_Z);
 
     /* Number of SNe at this time-step */
     double N_SNe;
@@ -312,29 +333,41 @@ INLINE static void compute_SNII_feedback(
     }
 
     /* Abort if there are no SNe exploding this step */
-    if (N_SNe == 0.) return;
+    if (N_SNe <= 0.) return;
 
     /* Conversion factor from T to internal energy */
     const double conv_factor = feedback_props->temp_to_u_factor;
 
-    /* Calculate the default heating probability */
+    /* Calculate the default heating probability (accounting for round-off) */
     double prob = f_E * E_SNe * N_SNe / (conv_factor * delta_T * ngb_gas_mass);
+    prob = max(prob, 0.0);
 
     /* Calculate the change in internal energy of the gas particles that get
      * heated */
     double delta_u;
+
+    /* Number of SNII events for this stellar particle */
+    int number_of_SN_events = 0;
+
     if (prob <= 1.) {
 
       /* Normal case */
       delta_u = delta_T * conv_factor;
 
+      for (int i = 0; i < ngb_gas_N; i++) {
+        const double rand_thermal = random_unit_interval_part_ID_and_ray_idx(
+            sp->id, i, ti_begin, random_number_stellar_feedback_3);
+        if (rand_thermal < prob) number_of_SN_events++;
+      }
+
     } else {
 
       /* Special case: we need to adjust the energy irrespective of the
          desired deltaT to ensure we inject all the available energy. */
-
-      prob = 1.;
       delta_u = f_E * E_SNe * N_SNe / ngb_gas_mass;
+
+      /* Number of SNIa events is equal to the number of Ngbs */
+      number_of_SN_events = ngb_gas_N;
     }
 
 #ifdef SWIFT_DEBUG_CHECKS
@@ -342,10 +375,30 @@ INLINE static void compute_SNII_feedback(
       error("f_E is not in the valid range! f_E=%f sp->id=%lld", f_E, sp->id);
 #endif
 
-    /* Store all of this in the star for delivery onto the gas */
-    sp->f_E = f_E;
-    sp->feedback_data.to_distribute.SNII_heating_probability = prob;
+    /* If we have more heating events than the maximum number of
+     * rays (eagle_feedback_number_of_rays), then we cannot
+     * distribute all of the heating events (since 1 event = 1 ray), so we need
+     * to increase the thermal energy per ray and make the number of events
+     * equal to the number of rays */
+    if (number_of_SN_events > eagle_SNII_feedback_num_of_rays) {
+      const double alpha_thermal =
+          (double)number_of_SN_events / (double)eagle_SNII_feedback_num_of_rays;
+      delta_u *= alpha_thermal;
+      number_of_SN_events = eagle_SNII_feedback_num_of_rays;
+    }
+
+    /* Current total f_E for this star */
+    double star_f_E = sp->f_E * sp->number_of_SNII_events;
+
+    /* New total */
+    star_f_E = (star_f_E + f_E) / (sp->number_of_SNII_events + 1.);
+
+    /* Store all of this in the star for delivery onto the gas and recording */
+    sp->f_E = star_f_E;
+    sp->number_of_SNII_events++;
     sp->feedback_data.to_distribute.SNII_delta_u = delta_u;
+    sp->feedback_data.to_distribute.SNII_num_of_thermal_energy_inj =
+        number_of_SN_events;
   }
 }
 
@@ -825,16 +878,19 @@ INLINE static void evolve_AGB(const double log10_min_mass,
  * functions to calculate feedback due to SNIa, SNII and AGB
  *
  * @param feedback_props feedback_props data structure
+ * @param phys_const The physical constants in internal units.
  * @param cosmo The cosmological model.
  * @param sp spart that we're evolving
  * @param us unit_system data structure
  * @param age age of spart at beginning of step
  * @param dt length of current timestep
+ * @param ti_begin The current integer time (for random number hashing).
  */
 void compute_stellar_evolution(const struct feedback_props* feedback_props,
+                               const struct phys_const* phys_const,
                                const struct cosmology* cosmo, struct spart* sp,
                                const struct unit_system* us, const double age,
-                               const double dt) {
+                               const double dt, const integertime_t ti_begin) {
 
   TIMER_TIC;
 
@@ -846,26 +902,30 @@ void compute_stellar_evolution(const struct feedback_props* feedback_props,
 #endif
 
   /* Convert dt and stellar age from internal units to Gyr. */
-  const double Gyr_in_cgs = 1e9 * 365.25 * 24. * 3600.;
-  const double time_to_cgs = units_cgs_conversion_factor(us, UNIT_CONV_TIME);
-  const double conversion_factor = time_to_cgs / Gyr_in_cgs;
-  const double dt_Gyr = dt * conversion_factor;
-  const double star_age_Gyr = age * conversion_factor;
+  const double Gyr_inv = 1. / (phys_const->const_year * 1e9);
+  const double dt_Gyr = dt * Gyr_inv;
+  const double star_age_Gyr = age * Gyr_inv;
 
   /* Get the birth mass of the star */
   const double M_init = sp->mass_init;
 
   /* Get the total metallicity (metal mass fraction) at birth time and impose a
    * minimum */
-  const double Z = max(chemistry_get_total_metal_mass_fraction_for_feedback(sp),
-                       exp10(log10_min_metallicity));
+  const double Z =
+      max(chemistry_get_star_total_metal_mass_fraction_for_feedback(sp),
+          exp10(log10_min_metallicity));
 
   /* Get the individual abundances (mass fractions at birth time) */
   const float* const abundances =
-      chemistry_get_metal_mass_fraction_for_feedback(sp);
+      chemistry_get_star_metal_mass_fraction_for_feedback(sp);
 
   /* Properties collected in the stellar density loop. */
+  const int ngb_Number = sp->feedback_data.to_collect.ngb_N;
   const float ngb_gas_mass = sp->feedback_data.to_collect.ngb_mass;
+  const float ngb_gas_Z = sp->feedback_data.to_collect.ngb_Z;
+  const float ngb_gas_rho = sp->feedback_data.to_collect.ngb_rho;
+  const float ngb_gas_phys_nH_cgs =
+      ngb_gas_rho * cosmo->a3_inv * feedback_props->rho_to_n_cgs;
 
   /* Check if there are neighbours, otherwise exit */
   if (ngb_gas_mass == 0.f || sp->density.wcount * pow_dimension(sp->h) < 1e-4) {
@@ -914,8 +974,9 @@ void compute_stellar_evolution(const struct feedback_props* feedback_props,
 
   /* Compute properties of the stochastic SNII feedback model. */
   if (feedback_props->with_SNII_feedback) {
-    compute_SNII_feedback(sp, age, dt, ngb_gas_mass, feedback_props,
-                          min_dying_mass_Msun, max_dying_mass_Msun);
+    compute_SNII_feedback(sp, age, dt, ngb_Number, ngb_gas_mass,
+                          ngb_gas_phys_nH_cgs, ngb_gas_Z, feedback_props,
+                          min_dying_mass_Msun, max_dying_mass_Msun, ti_begin);
   }
 
   /* Integration interval is zero - this can happen if minimum and maximum
@@ -984,8 +1045,6 @@ void feedback_props_init(struct feedback_props* fp,
                          const struct hydro_props* hydro_props,
                          const struct cosmology* cosmo) {
 
-  const double Gyr_in_cgs = 1.0e9 * 365.25 * 24. * 3600.;
-
   /* Main operation modes ------------------------------------------------- */
 
   fp->with_SNII_feedback =
@@ -1025,6 +1084,22 @@ void feedback_props_init(struct feedback_props* fp,
 
   /* Properties of the SNII energy feedback model ------------------------- */
 
+  char model[64];
+  parser_get_param_string(params, "EAGLEFeedback:SNII_feedback_model", model);
+  if (strcmp(model, "Random") == 0)
+    fp->feedback_model = SNII_random_ngb_model;
+  else if (strcmp(model, "Isotropic") == 0)
+    fp->feedback_model = SNII_isotropic_model;
+  else if (strcmp(model, "MinimumDistance") == 0)
+    fp->feedback_model = SNII_minimum_distance_model;
+  else if (strcmp(model, "MinimumDensity") == 0)
+    fp->feedback_model = SNII_minimum_density_model;
+  else
+    error(
+        "The SNII feedback model must be either 'Random', 'MinimumDistance', "
+        "'MinimumDensity' or 'Isotropic', not %s",
+        model);
+
   /* Are we sampling the SNII lifetimes for feedback or using a fixed delay? */
   fp->SNII_sampled_delay =
       parser_get_param_int(params, "EAGLEFeedback:SNII_sampled_delay");
@@ -1034,7 +1109,7 @@ void feedback_props_init(struct feedback_props* fp,
     /* Set the delay time before SNII occur */
     fp->SNII_wind_delay =
         parser_get_param_double(params, "EAGLEFeedback:SNII_wind_delay_Gyr") *
-        Gyr_in_cgs / units_cgs_conversion_factor(us, UNIT_CONV_TIME);
+        phys_const->const_year * 1e9;
   }
 
   /* Read the temperature change to use in stochastic heating */
@@ -1083,6 +1158,12 @@ void feedback_props_init(struct feedback_props* fp,
   if (fp->f_E_max < fp->f_E_min) {
     error("Can't have the maximal energy fraction smaller than the minimal!");
   }
+
+  /* Are we using the stars' birth properties or at feedback time? */
+  fp->use_birth_density_for_f_th = parser_get_param_int(
+      params, "EAGLEFeedback:SNII_energy_fraction_use_birth_density");
+  fp->use_birth_Z_for_f_th = parser_get_param_int(
+      params, "EAGLEFeedback:SNII_energy_fraction_use_birth_metallicity");
 
   /* Properties of the SNII enrichment model -------------------------------- */
 
@@ -1157,7 +1238,7 @@ void feedback_props_init(struct feedback_props* fp,
   fp->stellar_evolution_age_cut =
       parser_get_param_double(params,
                               "EAGLEFeedback:stellar_evolution_age_cut_Gyr") *
-      Gyr_in_cgs / units_cgs_conversion_factor(us, UNIT_CONV_TIME);
+      phys_const->const_year * 1e9;
 
   fp->stellar_evolution_sampling_rate = parser_get_param_double(
       params, "EAGLEFeedback:stellar_evolution_sampling_rate");

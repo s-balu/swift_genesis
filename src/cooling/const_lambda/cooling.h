@@ -36,7 +36,7 @@
 #include <math.h>
 
 /* Local includes. */
-#include "const.h"
+#include "cooling_properties.h"
 #include "cosmology.h"
 #include "entropy_floor.h"
 #include "error.h"
@@ -294,6 +294,34 @@ INLINE static float cooling_get_temperature(
     return T_over_mu * mu_neutral;
   else
     return T_transition;
+}
+
+/**
+ * @brief Returns the subgrid temperature of a particle.
+ *
+ * This model has no subgrid quantity. We return an error.
+ *
+ * @param p The particle.
+ * @param xp The extended particle data.
+ */
+INLINE static float cooling_get_subgrid_temperature(const struct part* p,
+                                                    const struct xpart* xp) {
+  error("This cooling model does not use subgrid quantities!");
+  return -1.f;
+}
+
+/**
+ * @brief Returns the subgrid density of a particle.
+ *
+ * This model has no subgrid quantity. We return an error.
+ *
+ * @param p The particle.
+ * @param xp The extended particle data.
+ */
+INLINE static float cooling_get_subgrid_density(const struct part* p,
+                                                const struct xpart* xp) {
+  error("This cooling model does not use subgrid quantities!");
+  return -1.f;
 }
 
 /**

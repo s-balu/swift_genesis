@@ -18,20 +18,22 @@ Setting up VELOCIraptor
 -----------------------
 
 The first step is setting up VELOCIraptor, this requires us to download the 
-git repository as::
+git repository at::
   
-  git clone https://github.com/pelahi/VELOCIraptor-STF
+  git clone https://github.com/ICRAR/VELOCIraptor-STF.git
 
 Similar to the SWIFT with VELOCIraptor configuration, we can use the 
 master to analyse individual snapshots. We can use this branch
 by doing::
 
   cd VELOCIraptor-STF
-  git fetch
+  git submodule update --init --recursive
 
 Again we need to configure VELOCIraptor::
 
-  cmake . -DVR_USE_HYDRO=ON -DCMAKE_BUILD_TYPE=Release
+  mkdir build
+  cd build
+  cmake ../ -DVR_USE_HYDRO=ON -DCMAKE_BUILD_TYPE=Release
 
 The first parameter activates the processing of gas, stars and black holes. It
 can be omitted for simulations evolving only dark matter.

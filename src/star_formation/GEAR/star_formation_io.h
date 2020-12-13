@@ -27,6 +27,24 @@
 #include "io_properties.h"
 
 /**
+ * @brief Specifies which s-particle fields to read from a dataset
+ *
+ * @param sparts The s-particle array.
+ * @param list The list of i/o properties to read.
+ *
+ * @return num_fields The number of i/o fields to read.
+ */
+INLINE static int star_formation_read_particles(struct spart* sparts,
+                                                struct io_props* list) {
+
+  /* List what we want to read */
+  list[0] = io_make_input_field("BirthMass", FLOAT, 1, OPTIONAL, UNIT_CONV_MASS,
+                                sparts, sf_data.birth_mass);
+
+  return 1;
+}
+
+/**
  * @brief Specifies which particle fields to write to a dataset
  *
  * @param parts The particle array.
@@ -86,12 +104,16 @@ star_formation_write_sparticles(const struct spart* sparts,
  * @param phys_const Physical constants in internal units
  * @param us The current internal system of units
  * @param hydro_props The #hydro_props.
+ * @param cosmo The current cosmological model.
+ * @param entropy_floor The properties of the entropy floor used in this
+ * simulation.
  * @param starform the star formation law properties to initialize
- *
  */
 INLINE static void starformation_init_backend(
     struct swift_params* parameter_file, const struct phys_const* phys_const,
     const struct unit_system* us, const struct hydro_props* hydro_props,
+    const struct cosmology* cosmo,
+    const struct entropy_floor_properties* entropy_floor,
     struct star_formation* starform) {
 
   /* Star formation efficiency */
@@ -113,7 +135,9 @@ INLINE static void starformation_init_backend(
   starform->min_mass_frac_plus_one += 1.;
 
   /* Get the jeans factor */
-  starform->n_jeans_2_3 = pow(pressure_floor_props.n_jeans, 2. / 3.);
+  starform->n_jeans_2_3 =
+      parser_get_param_float(parameter_file, "GEARPressureFloor:jeans_factor");
+  starform->n_jeans_2_3 = pow(starform->n_jeans_2_3, 2. / 3.);
 
   /* Apply unit change */
   starform->maximal_temperature *=

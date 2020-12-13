@@ -21,11 +21,13 @@
 #define SWIFT_GEAR_STAR_FORMATION_H
 
 /* Local includes */
+#include "chemistry.h"
 #include "cooling.h"
 #include "cosmology.h"
 #include "engine.h"
 #include "entropy_floor.h"
 #include "error.h"
+#include "feedback.h"
 #include "hydro_properties.h"
 #include "parser.h"
 #include "part.h"
@@ -306,6 +308,9 @@ INLINE static void star_formation_copy_properties(
     const struct cooling_function_data* restrict cooling,
     const int convert_part) {
 
+  /* Initialize the feedback */
+  feedback_init_after_star_formation(sp, e->feedback_props);
+
   /* Store the current mass */
   const float mass_gas = hydro_get_mass(p);
   if (!convert_part) {
@@ -358,6 +363,19 @@ INLINE static void star_formation_copy_properties(
 INLINE static void starformation_print_backend(
     const struct star_formation* starform) {
   message("Star formation law is 'GEAR'");
+}
+
+/**
+ * @brief Return the star formation rate of a particle.
+ *
+ * This scheme does not store the SFR in the particles. We return 0.
+ *
+ * @param p The particle.
+ * @param xp The extended data of the particle.
+ */
+INLINE static float star_formation_get_SFR(const struct part* p,
+                                           const struct xpart* xp) {
+  return 0.f;
 }
 
 /**

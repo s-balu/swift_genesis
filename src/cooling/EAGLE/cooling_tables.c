@@ -32,7 +32,7 @@
 
 /* Local includes. */
 #include "chemistry_struct.h"
-#include "cooling_struct.h"
+#include "cooling_properties.h"
 #include "cooling_tables.h"
 #include "error.h"
 #include "interpolate.h"
@@ -293,7 +293,7 @@ void read_cooling_header(const char *fname,
     cooling->nH[i] = log10(cooling->nH[i]);
   }
 
-    /* Compute inverse of solar mass fractions */
+  /* Compute inverse of solar mass fractions */
 #if defined(__ICC)
 #pragma novector
 #endif

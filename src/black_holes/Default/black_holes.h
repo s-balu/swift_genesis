@@ -24,17 +24,21 @@
 /* Local includes */
 #include "black_holes_properties.h"
 #include "black_holes_struct.h"
+#include "cooling_properties.h"
 #include "dimension.h"
 #include "kernel_hydro.h"
 #include "minmax.h"
 
 /**
- * @brief Computes the gravity time-step of a given black hole particle.
+ * @brief Computes the time-step of a given black hole particle.
  *
  * @param bp Pointer to the s-particle data.
+ * @param props The properties of the black hole scheme.
+ * @param constants The physical constants (in internal units).
  */
 __attribute__((always_inline)) INLINE static float black_holes_compute_timestep(
-    const struct bpart* const bp) {
+    const struct bpart* const bp, const struct black_holes_props* props,
+    const struct phys_const* constants, const struct cosmology* cosmo) {
 
   return FLT_MAX;
 }
@@ -141,6 +145,30 @@ black_holes_bpart_has_no_neighbours(struct bpart* restrict bp,
 }
 
 /**
+ * @brief Return the current instantaneous accretion rate of the BH.
+ *
+ * Empty BH model --> return 0.
+ *
+ * @param bp the #bpart.
+ */
+__attribute__((always_inline)) INLINE static double
+black_holes_get_accretion_rate(const struct bpart* bp) {
+  return 0.;
+}
+
+/**
+ * @brief Return the total accreted gas mass of this BH.
+ *
+ * Empty BH model --> return 0.
+ *
+ * @param bp the #bpart.
+ */
+__attribute__((always_inline)) INLINE static double
+black_holes_get_accreted_mass(const struct bpart* bp) {
+  return 0.;
+}
+
+/**
  * @brief Update the properties of a black hole particles by swallowing
  * a gas particle.
  *
@@ -196,7 +224,7 @@ __attribute__((always_inline)) INLINE static void black_holes_prepare_feedback(
     const struct phys_const* constants, const struct cosmology* cosmo,
     const struct cooling_function_data* cooling,
     const struct entropy_floor_properties* floor_props, const double time,
-    const int with_cosmology, const double dt) {}
+    const int with_cosmology, const double dt, const integertime_t ti_begin) {}
 
 /**
  * @brief Finish the calculation of the new BH position.

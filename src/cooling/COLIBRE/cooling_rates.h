@@ -325,8 +325,9 @@ eagle_helium_reionization_extraheat(
  * TO DO: outside table ranges, it uses at the moment the minimum, maximu value
  */
 __attribute__((always_inline)) INLINE static float colibre_convert_u_to_temp(
-    const double log_10_u_cgs, const float redshift, int n_H_index, float d_n_H,
-    int met_index, float d_met, int red_index, float d_red,
+    const double log_10_u_cgs, const float redshift, const int n_H_index,
+    const float d_n_H, const int met_index, const float d_met,
+    const int red_index, const float d_red,
     const struct cooling_function_data *cooling) {
 
   /* Get index of u along the internal energy axis */
@@ -347,12 +348,17 @@ __attribute__((always_inline)) INLINE static float colibre_convert_u_to_temp(
       colibre_cooling_N_internalenergy, colibre_cooling_N_metallicity,
       colibre_cooling_N_density);
 
-  /* Special case for temperatures below the start of the table */
+  /* General interpolation returns u for the first (or last) element
+   * but we want to extrapolate in this case. We assume that the u-T relation
+   * does not change outside the table range */
   if (u_index == 0 && d_u == 0.f) {
 
-    /* The temperature is multiplied by u / 10^T[0]
-     * where T[0] is the first entry in the table */
-    log_10_T += log_10_u_cgs - cooling->Temp[0];
+    log_10_T += log_10_u_cgs - cooling->Therm[0];
+
+  } else if (u_index >= colibre_cooling_N_internalenergy - 2 && d_u == 1.f) {
+
+    log_10_T +=
+        log_10_u_cgs - cooling->Therm[colibre_cooling_N_internalenergy - 1];
   }
 
   return log_10_T;
@@ -377,8 +383,9 @@ __attribute__((always_inline)) INLINE static float colibre_convert_u_to_temp(
  * TO DO: outside table ranges, it uses at the moment the minimum, maximu value
  */
 __attribute__((always_inline)) INLINE static float colibre_convert_temp_to_u(
-    const double log_10_T, const float redshift, int n_H_index, float d_n_H,
-    int met_index, float d_met, int red_index, float d_red,
+    const double log_10_T, const float redshift, const int n_H_index,
+    const float d_n_H, const int met_index, const float d_met,
+    const int red_index, const float d_red,
     const struct cooling_function_data *cooling) {
 
   /* Get index of u along the internal energy axis */
@@ -398,6 +405,17 @@ __attribute__((always_inline)) INLINE static float colibre_convert_temp_to_u(
       d_T, d_met, d_n_H, colibre_cooling_N_redshifts,
       colibre_cooling_N_temperature, colibre_cooling_N_metallicity,
       colibre_cooling_N_density);
+
+  /* General interpolation returns u for the first (or last) element
+   * but we want to extrapolate in this case. We assume that the u-T relation
+   * does not change outside the table range */
+  if (T_index == 0 && d_T == 0.f) {
+
+    log_10_U += cooling->Temp[0] - log_10_T;
+  } else if (T_index >= colibre_cooling_N_temperature - 2 && d_T == 1.f) {
+
+    log_10_U += cooling->Temp[colibre_cooling_N_temperature - 1] - log_10_T;
+  }
 
   return log_10_U;
 }
@@ -421,9 +439,10 @@ __attribute__((always_inline)) INLINE static float colibre_convert_temp_to_u(
  * @return linear electron density in cm-3 (NOT the electron fraction)
  */
 INLINE static float colibre_meanparticlemass_temperature(
-    double log_T_cgs, double redshift, double n_H_cgs, float ZZsol,
-    int n_H_index, float d_n_H, int met_index, float d_met, int red_index,
-    float d_red, const struct cooling_function_data *cooling) {
+    const double log_T_cgs, const double redshift, const double n_H_cgs,
+    const float ZZsol, const int n_H_index, const float d_n_H,
+    const int met_index, const float d_met, const int red_index,
+    const float d_red, const struct cooling_function_data *cooling) {
 
   /* Get index of T along the temperature axis */
   int T_index;
@@ -460,9 +479,11 @@ INLINE static float colibre_meanparticlemass_temperature(
  * @return linear electron density in cm-3 (NOT the electron fraction)
  */
 INLINE static float colibre_electron_density(
-    double log_u_cgs, double redshift, double n_H_cgs, float ZZsol,
-    const float abundance_ratio[colibre_cooling_N_elementtypes], int n_H_index,
-    float d_n_H, int met_index, float d_met, int red_index, float d_red,
+    const double log_u_cgs, const double redshift, const double n_H_cgs,
+    const float ZZsol,
+    const float abundance_ratio[colibre_cooling_N_elementtypes],
+    const int n_H_index, const float d_n_H, const int met_index,
+    const float d_met, const int red_index, const float d_red,
     const struct cooling_function_data *cooling) {
 
   /* Get index of u along the internal energy axis */
@@ -503,9 +524,11 @@ INLINE static float colibre_electron_density(
  * @return linear electron density in cm-3 (NOT the electron fraction)
  */
 INLINE static float colibre_electron_density_temperature(
-    double log_T_cgs, double redshift, double n_H_cgs, float ZZsol,
-    const float abundance_ratio[colibre_cooling_N_elementtypes], int n_H_index,
-    float d_n_H, int met_index, float d_met, int red_index, float d_red,
+    const double log_T_cgs, const double redshift, const double n_H_cgs,
+    const float ZZsol,
+    const float abundance_ratio[colibre_cooling_N_elementtypes],
+    const int n_H_index, const float d_n_H, const int met_index,
+    const float d_met, const int red_index, const float d_red,
     const struct cooling_function_data *cooling) {
 
   /* Get index of u along the internal energy axis */
@@ -527,7 +550,7 @@ INLINE static float colibre_electron_density_temperature(
 }
 
 /**
- * @brief Computes the net cooling rate (cooling - heating) for a given element
+ * @brief Computes the net cooling rate (heating - cooling) for a given element
  * abundance ratio, internal energy, redshift, and density. The unit of the net
  * cooling rate is Lambda / nH**2 [erg cm^3 s-1] and all input values are in
  * cgs. The Compton cooling is not taken from the tables but calculated
@@ -554,11 +577,12 @@ INLINE static float colibre_electron_density_temperature(
  * These are only used for testing: examples/CoolingRates/CoolingRatesCOLIBRE
  */
 INLINE static double colibre_cooling_rate(
-    double log_u_cgs, double redshift, double n_H_cgs,
-    const float abundance_ratio[colibre_cooling_N_elementtypes], int n_H_index,
-    float d_n_H, int met_index, float d_met, int red_index, float d_red,
-    const struct cooling_function_data *cooling, int onlyicool, int onlyiheat,
-    int icool, int iheat) {
+    const double log_u_cgs, const double redshift, const double n_H_cgs,
+    const float abundance_ratio[colibre_cooling_N_elementtypes],
+    const int n_H_index, const float d_n_H, const int met_index,
+    const float d_met, const int red_index, const float d_red,
+    const struct cooling_function_data *cooling, const int onlyicool,
+    const int onlyiheat, const int icool, const int iheat) {
 
   /* Set weights for cooling rates */
   float weights_cooling[colibre_cooling_N_cooltypes - 2];
@@ -702,11 +726,12 @@ INLINE static double colibre_cooling_rate(
  * These are only used for testing: examples/CoolingRates/CoolingRatesCOLIBRE
  */
 INLINE static double colibre_cooling_rate_temperature(
-    double log_T_cgs, double redshift, double n_H_cgs,
-    const float abundance_ratio[colibre_cooling_N_elementtypes], int n_H_index,
-    float d_n_H, int met_index, float d_met, int red_index, float d_red,
-    const struct cooling_function_data *cooling, int onlyicool, int onlyiheat,
-    int icool, int iheat) {
+    const double log_T_cgs, const double redshift, const double n_H_cgs,
+    const float abundance_ratio[colibre_cooling_N_elementtypes],
+    const int n_H_index, const float d_n_H, const int met_index,
+    const float d_met, const int red_index, const float d_red,
+    const struct cooling_function_data *cooling, const int onlyicool,
+    const int onlyiheat, const int icool, const int iheat) {
 
   /* Set weights for cooling rates */
   float weights_cooling[colibre_cooling_N_cooltypes - 2];

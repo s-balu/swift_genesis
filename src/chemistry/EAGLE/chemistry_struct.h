@@ -89,6 +89,8 @@ struct chemistry_part_data {
   float smoothed_iron_mass_fraction_from_SNIa;
 };
 
+#define chemistry_spart_data chemistry_part_data
+
 /**
  * @brief Chemical abundances traced by the #bpart in the EAGLE model.
  */
@@ -120,6 +122,12 @@ struct chemistry_bpart_data {
 
   /*! Iron mass coming from SNIa */
   float iron_mass_from_SNIa;
+
+  /*! Metallicity of converted part. */
+  float formation_metallicity;
+
+  /*! Smoothed metallicity of converted part. */
+  float smoothed_formation_metallicity;
 };
 
 #endif /* SWIFT_CHEMISTRY_STRUCT_EAGLE_H */

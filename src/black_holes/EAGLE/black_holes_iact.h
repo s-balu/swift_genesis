@@ -24,6 +24,7 @@
 #include "gravity.h"
 #include "hydro.h"
 #include "random.h"
+#include "rays.h"
 #include "space.h"
 #include "timestep_sync_part.h"
 #include "tracers.h"
@@ -81,11 +82,9 @@ runner_iact_nonsym_bh_gas_density(
   /* Contribution to the total neighbour mass */
   bi->ngb_mass += mj;
 
-  /* Neighbour sound speed */
-  const float cj = hydro_get_comoving_soundspeed(pj);
-
   /* Contribution to the smoothed sound speed */
-  bi->sound_speed_gas += mj * cj * wi;
+  const float cj = hydro_get_comoving_soundspeed(pj);
+  bi->sound_speed_gas += mj * wi * cj;
 
   /* Neighbour internal energy */
   const float uj = hydro_get_drifted_comoving_internal_energy(pj);
@@ -110,7 +109,7 @@ runner_iact_nonsym_bh_gas_density(
   bi->circular_velocity_gas[1] += mj * wi * (dx[2] * dv[0] - dx[0] * dv[2]);
   bi->circular_velocity_gas[2] += mj * wi * (dx[0] * dv[1] - dx[1] * dv[0]);
 
-  if (bh_props->multi_phase_bondi) {
+  if (bh_props->use_multi_phase_bondi) {
     /* Contribution to BH accretion rate
      *
      * i) Calculate denominator in Bondi formula */
@@ -151,6 +150,88 @@ runner_iact_nonsym_bh_gas_density(
   /* Update ngb counters */
   ++si->num_ngb_density;
 #endif
+
+  /* Gas particle id */
+  const long long gas_id = pj->id;
+
+  /* Choose AGN feedback model */
+  switch (bh_props->feedback_model) {
+    case AGN_isotropic_model: {
+      /* Compute arc lengths in AGN isotropic feedback and collect
+       * relevant data for later use in the feedback_apply loop */
+
+      /* Loop over rays */
+      for (int i = 0; i < eagle_blackhole_number_of_rays; i++) {
+
+        /* We generate two random numbers that we use
+        to randomly select the direction of the ith ray */
+
+        /* Random number in [0, 1[ */
+        const double rand_theta = random_unit_interval_part_ID_and_ray_idx(
+            bi->id, i, ti_current,
+            random_number_isotropic_AGN_feedback_ray_theta);
+
+        /* Random number in [0, 1[ */
+        const double rand_phi = random_unit_interval_part_ID_and_ray_idx(
+            bi->id, i, ti_current,
+            random_number_isotropic_AGN_feedback_ray_phi);
+
+        /* Compute arc length */
+        ray_minimise_arclength(dx, r, bi->rays + i, /*switch=*/-1, gas_id,
+                               rand_theta, rand_phi, pj->mass, /*ray_ext=*/NULL,
+                               /*v=*/NULL);
+      }
+      break;
+    }
+    case AGN_minimum_distance_model: {
+      /* Compute the size of the array that we want to sort. If the current
+       * function is called for the first time (at this time-step for this BH),
+       * then bi->num_ngbs = 1 and there is nothing to sort. Note that the
+       * maximum size of the sorted array cannot be larger then the maximum
+       * number of rays. */
+      const int arr_size = min(bi->num_ngbs, eagle_blackhole_number_of_rays);
+
+      /* Minimise separation between the gas particles and the BH. The rays
+       * structs with smaller ids in the ray array will refer to the particles
+       * with smaller distances to the BH. */
+      ray_minimise_distance(r, bi->rays, arr_size, gas_id, pj->mass);
+      break;
+    }
+    case AGN_minimum_density_model: {
+      /* Compute the size of the array that we want to sort. If the current
+       * function is called for the first time (at this time-step for this BH),
+       * then bi->num_ngbs = 1 and there is nothing to sort. Note that the
+       * maximum size of the sorted array cannot be larger then the maximum
+       * number of rays. */
+      const int arr_size = min(bi->num_ngbs, eagle_blackhole_number_of_rays);
+
+      /* Minimise separation between the gas particles and the BH. The rays
+       * structs with smaller ids in the ray array will refer to the particles
+       * with smaller distances to the BH. */
+      ray_minimise_distance(pj->rho, bi->rays, arr_size, gas_id, pj->mass);
+      break;
+    }
+    case AGN_random_ngb_model: {
+      /* Compute the size of the array that we want to sort. If the current
+       * function is called for the first time (at this time-step for this BH),
+       * then bi->num_ngbs = 1 and there is nothing to sort. Note that the
+       * maximum size of the sorted array cannot be larger then the maximum
+       * number of rays. */
+      const int arr_size = min(bi->num_ngbs, eagle_blackhole_number_of_rays);
+
+      /* To mimic a random draw among all the particles in the kernel, we
+       * draw random distances in [0,1) and then pick the particle(s) with
+       * the smallest of these 'fake' distances */
+      const float dist = random_unit_interval_two_IDs(
+          bi->id, pj->id, ti_current, random_number_BH_feedback);
+
+      /* Minimise separation between the gas particles and the BH. The rays
+       * structs with smaller ids in the ray array will refer to the particles
+       * with smaller 'fake' distances to the BH. */
+      ray_minimise_distance(dist, bi->rays, arr_size, gas_id, pj->mass);
+      break;
+    }
+  }
 }
 
 /**
@@ -256,8 +337,79 @@ runner_iact_nonsym_bh_gas_swallow(const float r2, const float *dx,
     }
   }
 
-  /* Is the BH hungry? */
-  if (bi->subgrid_mass > bi->mass) {
+  /* Check if the BH needs to be fed. If not, we're done here */
+  const float bh_mass_deficit = bi->subgrid_mass - bi->mass_at_start_of_step;
+  if (bh_mass_deficit <= 0.f) return;
+
+  if (bh_props->use_nibbling) {
+
+    /* If we do nibbling, things are quite straightforward. We transfer
+     * the mass and all associated quantities right here. */
+
+    if (bh_props->epsilon_r == 1.f) return;
+
+    const float bi_mass_orig = bi->mass;
+    const float pj_mass_orig = hydro_get_mass(pj);
+
+    /* Don't nibble from particles that are too small already */
+    if (pj_mass_orig < bh_props->min_gas_mass_for_nibbling) return;
+
+    /* Next line is equivalent to w_ij * m_j / Sum_j (w_ij * m_j) */
+    const float particle_weight = hi_inv_dim * wi * pj_mass_orig / bi->rho_gas;
+    float nibble_mass = bh_mass_deficit * particle_weight;
+
+    /* We radiated away some of the accreted mass, so need to take slightly
+     * more from the gas than the BH gained */
+    const float excess_fraction = 1.f / (1.f - bh_props->epsilon_r);
+
+    /* Need to check whether nibbling would push gas mass below minimum
+     * allowed mass */
+    float new_gas_mass = pj_mass_orig - nibble_mass * excess_fraction;
+    if (new_gas_mass < bh_props->min_gas_mass_for_nibbling) {
+      new_gas_mass = bh_props->min_gas_mass_for_nibbling;
+      nibble_mass = (pj_mass_orig - bh_props->min_gas_mass_for_nibbling) /
+                    excess_fraction;
+    }
+
+    /* Correct for nibbling the particle mass that is stored in rays */
+    for (int i = 0; i < eagle_blackhole_number_of_rays; i++) {
+      if (bi->rays[i].id_min_length == pj->id) bi->rays[i].mass = new_gas_mass;
+    }
+
+    /* Transfer (dynamical) mass from the gas particle to the BH */
+    bi->mass += nibble_mass;
+    hydro_set_mass(pj, new_gas_mass);
+
+    /* Add the angular momentum of the accreted gas to the BH total.
+     * Note no change to gas here. The cosmological conversion factors for
+     * velocity (a^-1) and distance (a) cancel out, so the angular momentum
+     * is already in physical units. */
+    const float dv[3] = {bi->v[0] - pj->v[0], bi->v[1] - pj->v[1],
+                         bi->v[2] - pj->v[2]};
+    bi->swallowed_angular_momentum[0] +=
+        nibble_mass * (dx[1] * dv[2] - dx[2] * dv[1]);
+    bi->swallowed_angular_momentum[1] +=
+        nibble_mass * (dx[2] * dv[0] - dx[0] * dv[2]);
+    bi->swallowed_angular_momentum[2] +=
+        nibble_mass * (dx[0] * dv[1] - dx[1] * dv[0]);
+
+    /* Update the BH momentum and velocity. Again, no change to gas here. */
+    const float bi_mom[3] = {bi_mass_orig * bi->v[0] + nibble_mass * pj->v[0],
+                             bi_mass_orig * bi->v[1] + nibble_mass * pj->v[1],
+                             bi_mass_orig * bi->v[2] + nibble_mass * pj->v[2]};
+
+    bi->v[0] = bi_mom[0] / bi->mass;
+    bi->v[1] = bi_mom[1] / bi->mass;
+    bi->v[2] = bi_mom[2] / bi->mass;
+
+    /* Update the BH and also gas metal masses */
+    struct chemistry_bpart_data *bi_chem = &bi->chemistry_data;
+    struct chemistry_part_data *pj_chem = &pj->chemistry_data;
+    chemistry_transfer_part_to_bpart(
+        bi_chem, pj_chem, nibble_mass * excess_fraction,
+        nibble_mass * excess_fraction / pj_mass_orig);
+
+  } else { /* ends nibbling section, below comes swallowing */
 
     /* Probability to swallow this particle
      * Recall that in SWIFT the SPH kernel is recovered by computing
@@ -288,7 +440,7 @@ runner_iact_nonsym_bh_gas_swallow(const float r2, const float *dx,
             bi->id, pj->id, pj->black_holes_data.swallow_id);
       }
     }
-  }
+  } /* ends section for swallowing */
 }
 
 /**
@@ -437,8 +589,8 @@ runner_iact_nonsym_bh_bh_swallow(const float r2, const float *dx,
 
     if ((v2_pec < v2_threshold) && (r2 < max_dist_merge2)) {
 
-      /* This particle is swallowed by the BH with the largest ID of all the
-       * candidates wanting to swallow it */
+      /* This particle is swallowed by the BH with the largest mass of all the
+       * candidates wanting to swallow it (we use IDs to break ties)*/
       if ((bj->merger_data.swallow_mass < bi->subgrid_mass) ||
           (bj->merger_data.swallow_mass == bi->subgrid_mass &&
            bj->merger_data.swallow_id < bi->id)) {
@@ -487,22 +639,34 @@ runner_iact_nonsym_bh_gas_feedback(const float r2, const float *dx,
                                    const integertime_t ti_current,
                                    const double time) {
 
-  /* Get the heating probability */
-  const float prob = bi->to_distribute.AGN_heating_probability;
+  /* Number of energy injections per BH per time-step */
+  const int num_energy_injections_per_BH =
+      bi->to_distribute.AGN_number_of_energy_injections;
 
   /* Are we doing some feedback? */
-  if (prob > 0.f) {
+  if (num_energy_injections_per_BH > 0) {
 
-    /* Draw a random number (Note mixing both IDs) */
-    const float rand = random_unit_interval(bi->id + pj->id, ti_current,
-                                            random_number_BH_feedback);
+    /* Number of energy injections that have reached this gas particle */
+    int num_of_energy_inj_received_by_gas = 0;
 
-    /* Are we lucky? */
-    if (rand < prob) {
+    /* Find out how many rays (= energy injections) this gas particle
+     * has received */
+    for (int i = 0; i < num_energy_injections_per_BH; i++) {
+      if (pj->id == bi->rays[i].id_min_length)
+        num_of_energy_inj_received_by_gas++;
+    }
 
-      /* Compute new energy per unit mass of this particle */
+    /* If the number of received rays is non-zero, inject
+     * AGN energy in thermal form */
+    if (num_of_energy_inj_received_by_gas > 0) {
+
+      /* Compute new energy per unit mass of this particle
+       * The energy the particle receives is proportional to the number of rays
+       * (num_of_energy_inj_received_by_gas) to which the particle was found to
+       * be closest. */
       const double u_init = hydro_get_physical_internal_energy(pj, xpj, cosmo);
-      const float delta_u = bi->to_distribute.AGN_delta_u;
+      const float delta_u = bi->to_distribute.AGN_delta_u *
+                            (float)num_of_energy_inj_received_by_gas;
       const double u_new = u_init + delta_u;
 
       hydro_set_physical_internal_energy(pj, xpj, cosmo, u_new);
@@ -519,7 +683,7 @@ runner_iact_nonsym_bh_gas_feedback(const float r2, const float *dx,
       /* message( */
       /*     "We did some AGN heating! id %llu BH id %llu probability " */
       /*     " %.5e  random_num %.5e du %.5e du/ini %.5e", */
-      /*     pj->id, bi->id, prob, rand, delta_u, delta_u / u_init); */
+      /*     pj->id, bi->id, 0.f, 0.f, delta_u, delta_u / u_init); */
 
       /* Synchronize the particle on the timeline */
       timestep_sync_part(pj);

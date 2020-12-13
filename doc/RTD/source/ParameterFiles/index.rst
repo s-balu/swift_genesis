@@ -6,8 +6,7 @@
 Parameter Files
 ===============
 
-This section desrcibes the options that are available in the
-parameter files.
+This section describes the options that are available in the parameter files.
 
 .. toctree::
    :maxdepth: 2
@@ -15,3 +14,4 @@ parameter files.
 
    parameter_description
    output_selection
+   lossy_filters

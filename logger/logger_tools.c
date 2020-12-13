@@ -17,11 +17,11 @@
  *
  ******************************************************************************/
 #include "logger_tools.h"
+
 #include "logger_header.h"
 #include "logger_loader_io.h"
-#include "logger_reader.h"
-
 #include "logger_particle.h"
+#include "logger_reader.h"
 
 #include <stdio.h>
 
@@ -42,7 +42,7 @@ int tools_get_next_record(const struct header *h, void *map, size_t *offset,
   if (header_is_backward(h))
     return _tools_get_next_record_backward(h, map, offset, file_size);
   else
-    error("Offsets are corrupted.");
+    error_python("Offsets are corrupted.");
 }
 
 /**
@@ -84,7 +84,7 @@ int _tools_get_next_record_forward(const struct header *h, void *map,
 int _tools_get_next_record_backward(const struct header *h, void *map,
                                     size_t *offset, size_t file_size) {
 #ifndef SWIFT_DEBUG_CHECKS
-  error("Should not be used, method too slow");
+  error_python("Should not be used, method too slow");
 #endif
   size_t current_offset = *offset;
   size_t record_header = LOGGER_MASK_SIZE + LOGGER_OFFSET_SIZE;
@@ -141,8 +141,8 @@ size_t tools_reverse_offset(const struct header *h, void *file_map,
   if (prev_offset == cur_offset) return after_current_record;
 
   if (prev_offset > cur_offset)
-    error("Unexpected offset: header %lu, current %lu.", prev_offset,
-          cur_offset);
+    error_python("Unexpected offset: header %lu, current %lu.", prev_offset,
+                 cur_offset);
 
   /* modify previous offset. */
   map = (char *)file_map + cur_offset - prev_offset + LOGGER_MASK_SIZE;
@@ -156,7 +156,7 @@ size_t tools_reverse_offset(const struct header *h, void *file_map,
   /* Check if we are not mixing timestamp and particles */
   if ((prev_mask != h->timestamp_mask && mask == h->timestamp_mask) ||
       (prev_mask == h->timestamp_mask && mask != h->timestamp_mask))
-    error("Unexpected mask: %lu, got %lu.", mask, prev_mask);
+    error_python("Unexpected mask: %lu, got %lu.", mask, prev_mask);
 
 #endif  // SWIFT_DEBUG_CHECKS
 
@@ -177,7 +177,7 @@ size_t tools_reverse_offset(const struct header *h, void *file_map,
 size_t tools_check_record_consistency(const struct logger_reader *reader,
                                       size_t offset) {
 #ifndef SWIFT_DEBUG_CHECKS
-  error("Should not check in non debug mode.");
+  error_python("Should not check in non debug mode.");
 #endif
 
   const struct header *h = &reader->log.header;
@@ -195,15 +195,15 @@ size_t tools_check_record_consistency(const struct logger_reader *reader,
     pointed_offset += offset;
   else if (header_is_backward(h)) {
     if (offset < pointed_offset)
-      error("Offset too large (%lu) at %lu with mask %lu.", pointed_offset,
-            offset, mask);
+      error_python("Offset too large (%lu) at %lu with mask %lu.",
+                   pointed_offset, offset, mask);
     pointed_offset = offset - pointed_offset;
   } else {
-    error("Offset are corrupted.");
+    error_python("Offset are corrupted.");
   }
 
   /* set offset after current record. */
-  map = (char *)+header_get_record_size_from_mask(h, mask);
+  map = (char *)map + header_get_record_size_from_mask(h, mask);
 
   if (pointed_offset == offset || pointed_offset == 0)
     return (size_t)((char *)map - (char *)file_init);
@@ -216,22 +216,106 @@ size_t tools_check_record_consistency(const struct logger_reader *reader,
   /* check if not mixing timestamp and particles. */
   if ((pointed_mask != h->timestamp_mask && mask == h->timestamp_mask) ||
       (pointed_mask == h->timestamp_mask && mask != h->timestamp_mask))
-    error("Error in the offset (mask %lu at %lu != %lu at %lu).", mask, offset,
-          pointed_mask, pointed_offset);
-
-  if (pointed_mask == h->timestamp_mask)
-    return (size_t)((char *)map - (char *)file_init);
-
-  struct logger_particle part;
-  logger_particle_read(&part, reader, offset, 0, logger_reader_const);
-
-  long long id = part.id;
-  logger_particle_read(&part, reader, pointed_offset, 0, logger_reader_const);
-
-  if (id != part.id) {
-    error("Offset wrong, id incorrect (%lli != %lli) at %lu.", id, part.id,
-          pointed_offset);
-  }
+    error_python("Error in the offset (mask %lu at %lu != %lu at %lu).", mask,
+                 offset, pointed_mask, pointed_offset);
 
   return (size_t)((char *)map - (char *)file_init);
+}
+
+/**
+ * @brief Compute the quintic hermite spline interpolation.
+ *
+ * @param t0 The time at the left of the interval.
+ * @param x0 The function at the left of the interval.
+ * @param v0 The first derivative at the left of the interval.
+ * @param a0 The second derivative at the left of the interval.
+ * @param t1 The time at the right of the interval.
+ * @param x1 The function at the right of the interval.
+ * @param v1 The first derivative at the right of the interval.
+ * @param a1 The second derivative at the right of the interval.
+ * @param t The time of the interpolation.
+ *
+ * @return The function evaluated at t.
+ */
+double logger_tools_quintic_hermite_spline(double t0, double x0, float v0,
+                                           float a0, double t1, double x1,
+                                           float v1, float a1, double t) {
+
+  /* Generates recurring variables  */
+  /* Time differences */
+  const double dt = t1 - t0;
+  const double dt2 = dt * dt;
+  const double dt3 = dt2 * dt;
+  const double dt4 = dt3 * dt;
+  const double dt5 = dt4 * dt;
+
+  const double t_t0 = t - t0;
+  const double t_t0_2 = t_t0 * t_t0;
+  const double t_t0_3 = t_t0_2 * t_t0;
+  const double t_t1 = t - t1;
+  const double t_t1_2 = t_t1 * t_t1;
+
+  /* Derivatives */
+  const double v0_dt = v0 * dt;
+  const double a0_dt2 = 0.5 * a0 * dt2;
+  const double v1_dt = v1 * dt;
+  const double a1_dt2 = 0.5 * a1 * dt2;
+
+  /* Do the first 3 terms of the hermite spline */
+  double x = x0 + v0 * t_t0 + 0.5 * a0 * t_t0_2;
+
+  /* Cubic term */
+  x += (x1 - x0 - v0_dt - a0_dt2) * t_t0_3 / dt3;
+
+  /* Quartic term */
+  x += (3. * x0 - 3. * x1 + v1_dt + 2. * v0_dt + a0_dt2) * t_t0_3 * t_t1 / dt4;
+
+  /* Quintic term */
+  x += (6. * x1 - 6. * x0 - 3. * v0_dt - 3. * v1_dt + a1_dt2 - a0_dt2) *
+       t_t0_3 * t_t1_2 / dt5;
+
+  return x;
+}
+
+/**
+ * @brief Compute the cubic hermite spline interpolation.
+ *
+ * @param t0 The time at the left of the interval.
+ * @param v0 The first derivative at the left of the interval.
+ * @param a0 The second derivative at the left of the interval.
+ * @param t1 The time at the right of the interval.
+ * @param v1 The first derivative at the right of the interval.
+ * @param a1 The second derivative at the right of the interval.
+ * @param t The time of the interpolation.
+ *
+ * @return The function evaluated at t.
+ */
+float logger_tools_cubic_hermite_spline(double t0, float v0, float a0,
+                                        double t1, float v1, float a1,
+                                        double t) {
+
+  /* Generates recurring variables  */
+  /* Time differences */
+  const float dt = t1 - t0;
+  const float dt2 = dt * dt;
+  const float dt3 = dt2 * dt;
+
+  const float t_t0 = t - t0;
+  const float t_t0_2 = t_t0 * t_t0;
+  const float t_t1 = t - t1;
+
+  /* Derivatives */
+  const float a0_dt = a0 * dt;
+  const float a1_dt = a1 * dt;
+
+  /* Do the first 2 terms of the hermite spline */
+  float x = v0 + a0 * t_t0;
+
+  /* Square term */
+  x += (v1 - v0 - a0_dt) * t_t0_2 / dt2;
+
+  /* Cubic term */
+  x += (2. * v0 - 2. * v1 + a1_dt + a0_dt) * t_t0_2 * t_t1 / dt3;
+
+  return x;
 }
