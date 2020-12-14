@@ -226,7 +226,7 @@ int InitVelociraptorExtra(const int i, char *config_name, struct unitinfo unit_i
 struct vr_return_data InvokeVelociraptor(
     const int snapnum, char *output_name, struct cosmoinfo cosmo_info,
     struct siminfo sim_info, const size_t num_gravity_parts,
-    const size_t num_hydro_parts, const size_t num_star_parts, const size_t num_bh_parts,
+    const size_t num_hydro_parts, const size_t num_star_parts,
     struct swift_vel_part *swift_parts, const int *cell_node_ids,
     const int numthreads, const int return_group_flags,
     const int return_most_bound);
@@ -986,7 +986,7 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
                    e->stf_subdir) >= FILENAME_BUFFER_SIZE) {
         error("FILENAME_BUFFER_SIZE is to small for snapshot directory name!");
       }
-    if (engine_rank == 0) io_make_snapshot_subdir(outputDirName);  
+    if (engine_rank == 0) io_make_snapshot_subdir(outputDirName);
 #ifdef WITH_MPI
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
@@ -1002,7 +1002,7 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
       error(
           "FILENAME_BUFFER_SIZE is to small for Velociraptor directory name!");
     }
-    if (engine_rank == 0) io_make_snapshot_subdir(subDirName);  
+    if (engine_rank == 0) io_make_snapshot_subdir(subDirName);
 #ifdef WITH_MPI
     MPI_Barrier(MPI_COMM_WORLD);
 #endif

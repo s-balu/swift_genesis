@@ -31,6 +31,7 @@
 #include "engine.h"
 
 /* Local headers. */
+#include "darkmatter_write_grids.h"
 #include "distributed_io.h"
 #include "kick.h"
 #include "line_of_sight.h"
@@ -903,4 +904,117 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params) {
     else
       e->time_first_los = los_time_first;
   }
+}
+
+/**
+ * @brief Writes density grids with the current state of the engine
+ *
+ * @param e The #engine.
+ */
+void engine_dump_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+  if (strnlen(e->density_grids_subdir, PARSER_MAX_LINE_SIZE) > 0) {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s/%s",
+                 e->density_grids_subdir,
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error(
+          "FILENAME_BUFFER_SIZE is too small for density grids path and file name");
+    }
+    /* Try to ensure the directory exists */
+    if (engine_rank == 0) io_make_snapshot_subdir(e->density_grids_subdir);
+#ifdef WITH_MPI
+    MPI_Barrier(MPI_COMM_WORLD);
+#endif
+  } else {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s",
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+  }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  /* Flag that we dumped a grids */
+  e->step_props |= engine_step_prop_density_field;
+  e->density_field_this_timestep = 1;
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
+}
+
+/**
+ * @brief Writes density grids with the current state of the engine when structure finding
+ * invoked
+ *
+ * @param e The #engine.
+ */
+void engine_dump_stf_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping structure finding related grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping structure finding related grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s.den",
+                 e->stf_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_stf_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_stf_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_stf_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
 }

@@ -122,7 +122,7 @@ const char *engine_policy_names[] = {"none",
                                      "logger",
                                      "line of sight",
                                      "sink",
-                                     "rt"};
+                                     "rt",
                                      "density grids"};
 
 /** The rank of the engine as a global variable (for messages). */
