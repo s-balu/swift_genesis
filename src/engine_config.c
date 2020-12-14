@@ -515,6 +515,18 @@ void engine_config(int restart, int fof, struct engine *e,
               e->a_first_fof_call, e->cosmology->a_begin);
       }
 
+      if (e->policy & engine_policy_produce_density_grids) {
+
+        if (e->delta_time_density_grids == -1. )
+          error("A value for `DensityGrids:delta_time` must be specified");
+
+        if (e->a_first_density_grids_output < e->cosmology->a_begin)
+          error(
+              "Scale-factor of first Density Grid output (%e) must be after the "
+              "simulation start a=%e.",
+              e->a_first_density_grids_output, e->cosmology->a_begin);
+      }
+
     } else {
 
       if (e->delta_time_snapshot <= 0.)
@@ -550,6 +562,20 @@ void engine_config(int restart, int fof, struct engine *e,
           error(
               "Time of first STF (%e) must be after the simulation start t=%e.",
               e->time_first_stf_output, e->time_begin);
+      }
+
+      if (e->policy & engine_policy_produce_density_grids) {
+
+        if (e->delta_time_density_grids == -1.)
+          error("A value for `DensityGrids:delta_time` must be specified");
+
+        if (e->delta_time_density_grids <= 0. && e->delta_time_density_grids != -1.)
+          error("Time between successive Density Grids (%e) must be positive.", e->delta_time_density_grids);
+
+        if (e->time_first_density_grids_output < e->time_begin)
+          error(
+              "Time of first Density Grids (%e) must be after the simulation start t=%e.",
+              e->time_first_density_grids_output, e->time_begin);
       }
     }
 

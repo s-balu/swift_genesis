@@ -1674,15 +1674,23 @@ int main(int argc, char *argv[]) {
     /* Write final stf? */
 #ifdef HAVE_VELOCIRAPTOR
     if (with_structure_finding && e.output_list_stf) {
-      if (e.output_list_stf->final_step_dump && !e.stf_this_timestep)
+      if (e.output_list_stf->final_step_dump && !e.stf_this_timestep){
         velociraptor_invoke(&e, /*linked_with_snap=*/0);
+        if (with_density_grids && e.stf_dump_grids) {
+            engine_dump_density_grids(&e);
+        }
+      }
     }
-    else if(with_structure_finding && !e.stf_this_timestep)
+    else if(with_structure_finding && !e.stf_this_timestep){
       velociraptor_invoke(&e, /*linked_with_snap=*/0);
+      if (with_density_grids && e.stf_dump_grids) {
+          engine_dump_density_grids(&e);
+      }
+    }
 #endif
     /* write final density field? */
     if(with_density_grids && e.output_list_density_grids){
-      if(e.output_list_density_grids->final_step_dump && !e.density_field_this_timestep);
+      if(e.output_list_density_grids->final_step_dump && !e.density_field_this_timestep)
         engine_dump_density_grids(&e);
     }
     if(with_density_grids && !e.density_field_this_timestep)

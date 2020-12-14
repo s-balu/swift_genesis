@@ -3255,6 +3255,7 @@ void engine_clean(struct engine *e, const int fof, const int restart) {
     if (e->output_list_snapshots) free((void *)e->output_list_snapshots);
     if (e->output_list_stats) free((void *)e->output_list_stats);
     if (e->output_list_stf) free((void *)e->output_list_stf);
+    if (e->output_list_density_grids) free((void *)e->output_list_density_grids);
     if (e->output_list_los) free((void *)e->output_list_los);
 #ifdef WITH_LOGGER
     if (e->policy & engine_policy_logger) free((void *)e->logger);
@@ -3320,6 +3321,7 @@ void engine_struct_dump(struct engine *e, FILE *stream) {
   }
   if (e->output_list_density_grids) output_list_struct_dump(e->output_list_density_grids, stream);
   if (e->output_list_los) output_list_struct_dump(e->output_list_los, stream);
+  if (e->output_list_density_grids) output_list_struct_dump(e->output_list_density_grids, stream);
 
 #ifdef WITH_LOGGER
   if (e->policy & engine_policy_logger) {
