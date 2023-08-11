@@ -7,7 +7,7 @@
 /* Local includes. */
 #include <mpi.h>
 #include <hdf5_hl.h>
-
+//#include <hdf5.h>
 #include "error.h"
 #include "threadpool.h"
 
@@ -270,7 +270,7 @@ void darkmatter_write_grids(struct engine* e, const size_t Npart,
   if (h_grp < 0) error("Error while creating dark matter grids group.");
 
   /* attach an attribute with the gridding type */
-  H5LTset_attribute_string(h_file, group_name, "gridding_method", e->snapshot_grid_method);
+//  H5LTset_attribute_string(h_file, group_name, "gridding_method", e->snapshot_grid_method);
 
   int i_rank = 0, n_ranks = 1;
 #ifdef WITH_MPI
