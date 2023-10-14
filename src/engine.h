@@ -89,8 +89,9 @@ enum engine_policy {
   engine_policy_sinks = (1 << 25),
   engine_policy_rt = (1 << 26),
   engine_policy_power_spectra = (1 << 27),
+  engine_policy_produce_density_grids = (1 << 28)
 };
-#define engine_maxpolicy 28
+#define engine_maxpolicy 29
 extern const char *engine_policy_names[engine_maxpolicy + 1];
 
 /**
@@ -108,7 +109,9 @@ enum engine_step_properties {
   engine_step_prop_fof = (1 << 7),
   engine_step_prop_mesh = (1 << 8),
   engine_step_prop_power_spectra = (1 << 9),
-  engine_step_prop_done = (1 << 10),
+  engine_step_prop_density_field = (1 << 10),
+  engine_step_prop_done = (1 << 11),
+
 };
 
 /* Some constants */
@@ -127,6 +130,7 @@ enum engine_step_properties {
 #define engine_tasks_per_cell_margin 1.2
 #define engine_default_stf_subdir_per_output "."
 #define engine_default_snapshot_subdir "."
+#define engine_default_density_grids_subdir "."
 
 /**
  * @brief The rank of the engine as a global variable (for messages).
@@ -333,6 +337,9 @@ struct engine {
   double a_first_snapshot;
   double time_first_snapshot;
   double delta_time_snapshot;
+  int snapshot_dump_grids;
+  int snapshot_grid_dim;
+  char snapshot_grid_method[PARSER_MAX_LINE_SIZE];
 
   /* Output_List for the snapshots */
   struct output_list *output_list_snapshots;
@@ -388,6 +395,40 @@ struct engine {
   char stf_base_name[PARSER_MAX_LINE_SIZE];
   char stf_subdir_per_output[PARSER_MAX_LINE_SIZE];
   int stf_output_count;
+  int stf_dump_grids;
+  int stf_density_grids_grid_dim;
+  char stf_density_grids_grid_method[PARSER_MAX_LINE_SIZE];
+
+  /* extra structure finding information, allows for multiple dumps */
+  /* in multiple directories, maximum of 10. */
+  int num_extra_stf_outputs;
+  double a_first_stf_output_extra[10];
+  double time_first_stf_output_extra[10];
+  double delta_time_stf_extra[10];
+
+  /* Output_List for the structure finding */
+  struct output_list *output_list_stf_extra[10];
+
+  /* Integer time of the next stf output */
+  integertime_t ti_next_stf_extra[10];
+
+  /* also allow for possible different configs */
+  char stf_config_file_name_extra[10][PARSER_MAX_LINE_SIZE];
+  char stf_base_name_extra[10][PARSER_MAX_LINE_SIZE];
+  int stf_output_count_extra[10];
+
+  /* density grid information */
+  int density_grids_dump_grids;
+  char density_grids_base_name[PARSER_MAX_LINE_SIZE];
+  char density_grids_subdir[PARSER_MAX_LINE_SIZE];
+  int density_grids_grid_dim;
+  char density_grids_grid_method[PARSER_MAX_LINE_SIZE];
+  double a_first_density_grids_output;
+  double time_first_density_grids_output;
+  double delta_time_density_grids;
+  integertime_t ti_next_density_grids;
+  struct output_list *output_list_density_grids;
+  int density_grids_output_count;
 
   /* FoF black holes seeding information */
   double a_first_fof_call;
@@ -660,6 +701,9 @@ struct engine {
   /* Lightcone information */
   int flush_lightcone_maps;
 
+  /* Has there been a density field output this timestep? */
+  char density_field_this_timestep;
+
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   /* Run brute force checks only on steps when all gparts active? */
   int force_checks_only_all_active;
@@ -684,6 +728,8 @@ void engine_compute_next_fof_time(struct engine *e);
 void engine_compute_next_statistics_time(struct engine *e);
 void engine_compute_next_los_time(struct engine *e);
 void engine_compute_next_ps_time(struct engine *e);
+void engine_compute_next_stf_time_extra_outputs(struct engine *e);
+void engine_compute_next_density_grids_time(struct engine *e);
 void engine_recompute_displacement_constraint(struct engine *e);
 void engine_unskip(struct engine *e);
 void engine_unskip_rt_sub_cycle(struct engine *e);
@@ -698,6 +744,8 @@ void engine_collect_end_of_step(struct engine *e, int apply);
 void engine_collect_end_of_sub_cycle(struct engine *e);
 void engine_dump_snapshot(struct engine *e);
 void engine_run_on_dump(struct engine *e);
+void engine_dump_density_grids(struct engine *e);
+void engine_dump_stf_density_grids(struct engine *e);
 void engine_init_output_lists(struct engine *e, struct swift_params *params,
                               const struct output_options *output_options);
 void engine_init(
