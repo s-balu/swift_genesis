@@ -1354,6 +1354,10 @@ AM_CONDITIONAL([HAVEGRACKLE],[test -n "$GRACKLE_LIBS"])
 
 # Check for VELOCIraptor, non-MPI.
 have_velociraptor="no"
+have_velociraptor_with_gas="no"
+have_velociraptor_with_star="no"
+have_velociraptor_with_bh="no"
+have_velociraptor_with_nomass="no"
 AC_ARG_WITH([velociraptor],
     [AS_HELP_STRING([--with-velociraptor=PATH],
        [Directory where velociraptor library exists @<:@yes/no@:>@]
@@ -1376,7 +1380,11 @@ if test "x$with_velociraptor" != "xno"; then
       [velociraptor],
       [InitVelociraptor],
       [AC_DEFINE([HAVE_VELOCIRAPTOR],1,[The non-MPI VELOCIraptor library appears to be present.])],
-      [AC_MSG_ERROR(Cannot find non-MPI VELOCIraptor library at $with_velociraptor or incompatible HDF5 library loaded.)],
+      [AC_MSG_ERROR(Cannot find VELOCIraptor library at $with_velociraptor or incompatible
+      HDF5 library loaded or MPI library requires used to test existence of velociraptor
+      requires a change.  See config.log for more details. If MPI is seen then may require
+      alteration of configure.ac and rerun autogen.sh as  by default libmpi but some
+      systems require libmpi_cxx.)],
       [$VELOCIRAPTOR_LIBS $HDF5_LDFLAGS $HDF5_LIBS $GSL_LIBS]
    )
 fi
@@ -3111,6 +3119,13 @@ AC_MSG_RESULT([
    Fixed boundary particles    : $fixed_boundary_particles
    Planetary fixed entropy     : $planetary_fixed_entropy
    Ghost statistics            : $ghost_stats
+    
+   VELOCIraptor gas on          : $have_velociraptor_with_gas
+   VELOCIraptor star on         : $have_velociraptor_with_star
+   VELOCIraptor bh on           : $have_velociraptor_with_bh
+   VELOCIraptor with no
+   masses stored per particle,
+   useful for uniform boxes     : $HAVE_VELOCIRAPTOR_WITH_NOMASS
 
    Continuous Sim. Data Stream : $with_csds
 
