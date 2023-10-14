@@ -189,6 +189,7 @@ int main(int argc, char *argv[]) {
   int with_drift_all = 0;
   int with_mpole_reconstruction = 0;
   int with_structure_finding = 0;
+  int with_density_grids = 0;
   int with_csds = 0;
   int with_sinks = 0;
   int with_qla = 0;
@@ -256,6 +257,8 @@ int main(int argc, char *argv[]) {
                   "Generate lightcone outputs.", NULL, 0, 0),
       OPT_BOOLEAN('x', "velociraptor", &with_structure_finding,
                   "Run with structure finding.", NULL, 0, 0),
+      OPT_BOOLEAN(0, "density_grids", &with_density_grids,
+                  "Run with producing density grids.", NULL, 0, 0),
       OPT_BOOLEAN(0, "line-of-sight", &with_line_of_sight,
                   "Run with line-of-sight outputs.", NULL, 0, 0),
       OPT_BOOLEAN(0, "limiter", &with_timestep_limiter,
@@ -1528,6 +1531,7 @@ int main(int argc, char *argv[]) {
     if (with_line_of_sight) engine_policies |= engine_policy_line_of_sight;
     if (with_sinks) engine_policies |= engine_policy_sinks;
     if (with_rt) engine_policies |= engine_policy_rt;
+    if (with_density_grids) engine_policies |= engine_policy_produce_density_grids;
     if (with_power) engine_policies |= engine_policy_power_spectra;
 
     /* Initialize the engine with the space and policies. */
@@ -1885,11 +1889,28 @@ int main(int argc, char *argv[]) {
     /* Write final stf? */
 #ifdef HAVE_VELOCIRAPTOR
     if (with_structure_finding && e.output_list_stf) {
-      if (e.output_list_stf->final_step_dump && !e.stf_this_timestep)
+      if (e.output_list_stf->final_step_dump && !e.stf_this_timestep){
         velociraptor_invoke(&e, /*linked_with_snap=*/0);
+        if (with_density_grids && e.stf_dump_grids){
+          engine_dump_density_grids(&e);
+        }
+      }
+    }
+    else if(with_structure_finding && !e.stf_this_timestep){
+      velociraptor_invoke(&e, /*linked_with_snap=*/0);
+      if (with_density_grids && e.stf_dump_grids) {
+          engine_dump_density_grids(&e);
+      } 
     }
 #endif
-
+    /* write final density field? */
+    if(with_density_grids && e.output_list_density_grids){
+      if(e.output_list_density_grids->final_step_dump && !e.density_field_this_timestep)
+        engine_dump_density_grids(&e);
+    }
+    if(with_density_grids && !e.density_field_this_timestep)
+      engine_dump_density_grids(&e);
+  
     /* Write out any remaining lightcone data at the end of the run */
 #ifdef WITH_LIGHTCONE
     lightcone_array_flush(e.lightcone_array_properties, &(e.threadpool),
