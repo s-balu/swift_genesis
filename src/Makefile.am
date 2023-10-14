@@ -77,6 +77,7 @@ include_HEADERS += lightcone/healpix_util.h lightcone/pixel_index.h
 include_HEADERS += forcing.h
 include_HEADERS += power_spectrum.h
 include_HEADERS += ghost_stats.h
+include_HEADERS += darkmatter_write_grids.h
 
 # source files for EAGLE extra I/O
 EAGLE_EXTRA_IO_SOURCES=
@@ -197,6 +198,7 @@ AM_SOURCES += $(AGORA_FEEDBACK_SOURCES)
 AM_SOURCES += $(PS2020_COOLING_SOURCES)
 AM_SOURCES += $(SPHM1RT_RT_SOURCES)
 AM_SOURCES += $(GEAR_RT_SOURCES)
+AM_SOURCES += darkmatter_write_grids.c
 
 # Include files for distribution, not installation.
 nobase_noinst_HEADERS = align.h approx_math.h atomic.h barrier.h cycle.h error.h inline.h kernel_hydro.h kernel_gravity.h 
