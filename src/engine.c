@@ -105,6 +105,7 @@
 #include "tools.h"
 #include "units.h"
 #include "velociraptor_interface.h"
+#include "darkmatter_write_grids.h"
 
 const char *engine_policy_names[] = {"none",
                                      "rand",
@@ -134,7 +135,8 @@ const char *engine_policy_names[] = {"none",
                                      "line of sight",
                                      "sink",
                                      "rt",
-                                     "power spectra"};
+                                     "power spectra",
+                                     "density grids"};
 
 const int engine_default_snapshot_subsample[swift_type_count] = {0};
 
@@ -3154,6 +3156,12 @@ void engine_init(
       parser_get_opt_param_int(params, "Snapshots:invoke_fof", 0);
   e->snapshot_invoke_ps =
       parser_get_opt_param_int(params, "Snapshots:invoke_ps", 0);
+  e->snapshot_dump_grids =
+      parser_get_opt_param_int(params, "Snapshots:dump_grids", 0);
+  e->snapshot_grid_dim =
+      parser_get_opt_param_int(params, "Snapshots:grid_dim", 128);
+  parser_get_opt_param_string(params, "Snapshots:grid_method",
+                              e->snapshot_grid_method, "NGP");
   e->snapshot_use_delta_from_edge =
       parser_get_opt_param_int(params, "Snapshots:use_delta_from_edge", 0);
   if (e->snapshot_use_delta_from_edge) {
@@ -3172,6 +3180,7 @@ void engine_init(
   e->stf_output_count = 0;
   e->los_output_count = 0;
   e->ps_output_count = 0;
+  bzero(e->stf_output_count_extra, 10 * sizeof(int));
   e->dt_min = parser_get_param_double(params, "TimeIntegration:dt_min");
   e->dt_max = parser_get_param_double(params, "TimeIntegration:dt_max");
   e->max_nr_rt_subcycles = parser_get_opt_param_int(
@@ -3192,6 +3201,8 @@ void engine_init(
   e->ti_next_stf = 0;
   e->ti_next_fof = 0;
   e->ti_next_ps = 0;
+  bzero(e->ti_next_stf_extra, 10 * sizeof(integertime_t));
+  e->ti_next_density_grids = 0;
   e->verbose = verbose;
   e->wallclock_time = 0.f;
   e->physical_constants = physical_constants;
@@ -3219,6 +3230,7 @@ void engine_init(
   e->parameter_file = params;
   e->output_options = output_options;
   e->stf_this_timestep = 0;
+  e->density_field_this_timestep = 0;
   e->los_properties = los_properties;
   e->lightcone_array_properties = lightcone_array_properties;
   e->ics_metadata = ics_metadata;
@@ -3276,6 +3288,9 @@ void engine_init(
   if (e->policy & engine_policy_structure_finding) {
     parser_get_param_string(params, "StructureFinding:basename",
                             e->stf_base_name);
+    parser_get_opt_param_string(params, "StructureFinding:subdir",
+                                e->stf_subdir,
+                                engine_default_stf_subdir);
     parser_get_opt_param_string(params, "StructureFinding:subdir_per_output",
                                 e->stf_subdir_per_output,
                                 engine_default_stf_subdir_per_output);
@@ -3288,6 +3303,58 @@ void engine_init(
         params, "StructureFinding:scale_factor_first", 0.1);
     e->delta_time_stf =
         parser_get_opt_param_double(params, "StructureFinding:delta_time", -1.);
+
+    /* additions for extra calls to VELOCIraptor to different directories */
+    /* possibly with different cadence and/or different configs */
+    /* need to add error checks if there are not enough outputs listed */
+    e->num_extra_stf_outputs = parser_get_opt_param_int(params, "StructureFinding:number_of_extra_stf_outputs",0);
+    if (e->num_extra_stf_outputs) {
+        char stringtemp[500];
+        for (int i=0;i<e->num_extra_stf_outputs;i++) {
+            sprintf(stringtemp, "StructureFinding:basename_extra_%d", i);
+            parser_get_param_string(params, stringtemp, e->stf_base_name_extra[i]);
+            sprintf(stringtemp, "StructureFinding:config_file_name_extra_%d", i);
+            parser_get_param_string(params, stringtemp, e->stf_config_file_name_extra[i]);
+            sprintf(stringtemp, "StructureFinding:time_first_extra_%d",i);
+            e->time_first_stf_output_extra[i] =
+                parser_get_opt_param_double(params, stringtemp, 0.);
+            sprintf(stringtemp, "StructureFinding:scale_factor_first_extra_%d",i);
+            e->a_first_stf_output_extra[i] = parser_get_opt_param_double(
+                params, stringtemp, 0.1);
+            sprintf(stringtemp, "StructureFinding:delta_time_extra_%d",i);
+            e->delta_time_stf_extra[i] =
+                parser_get_opt_param_double(params, stringtemp, -1.);
+        }
+    }
+    /* load density grid information if producing density fields at the same time as
+    halo catalogs */
+    if (e->policy & engine_policy_produce_density_grids) {
+        e->stf_dump_grids =
+            parser_get_opt_param_int(params, "StructureFinding:dump_grids", 0);
+        e->stf_density_grids_grid_dim = parser_get_opt_param_int(params, "StructureFinding:grid_dim", 128);
+        parser_get_opt_param_string(params, "StructureFinding:grid_method",
+                                e->stf_density_grids_grid_method, "NGP");
+    }
+
+  }
+
+  /* load density grid information */
+  if (e->policy & engine_policy_produce_density_grids) {
+    parser_get_param_string(params, "DensityGrids:basename",
+                            e->density_grids_base_name);
+    parser_get_opt_param_string(params, "DensityGrids:subdir",
+                                e->density_grids_subdir,
+                                engine_default_density_grids_subdir);
+    e->density_grids_grid_dim = parser_get_opt_param_int(params, "DensityGrids:grid_dim", 128);
+    parser_get_opt_param_string(params, "DensityGrids:grid_method",
+                            e->density_grids_grid_method, "NGP");
+    e->time_first_density_grids_output =
+        parser_get_opt_param_double(params, "DensityGrids:time_first", 0.);
+    e->a_first_density_grids_output = parser_get_opt_param_double(
+        params, "DensityGrids:scale_factor_first", 0.1);
+    e->delta_time_density_grids =
+        parser_get_opt_param_double(params, "DensityGrids:delta_time", -1.);
+
   }
 
   /* Initialise line of sight output. */
@@ -3602,7 +3669,11 @@ void engine_clean(struct engine *e, const int fof, const int restart) {
   output_list_clean(&e->output_list_ps);
 
   output_options_clean(e->output_options);
-
+  if (e->num_extra_stf_outputs) {
+    for (int i=0;i<e->num_extra_stf_outputs;i++) {
+      output_list_clean(&e->output_list_stf_extra[i]);
+    }
+  }
   ic_info_clean(e->ics_metadata);
 
   swift_free("links", e->links);
@@ -3679,6 +3750,7 @@ void engine_clean(struct engine *e, const int fof, const int restart) {
     if (e->output_list_snapshots) free((void *)e->output_list_snapshots);
     if (e->output_list_stats) free((void *)e->output_list_stats);
     if (e->output_list_stf) free((void *)e->output_list_stf);
+    if (e->output_list_density_grids) free((void *)e->output_list_density_grids);
     if (e->output_list_los) free((void *)e->output_list_los);
     if (e->output_list_ps) free((void *)e->output_list_ps);
 #ifdef WITH_CSDS
@@ -3742,12 +3814,21 @@ void engine_struct_dump(struct engine *e, FILE *stream) {
   ic_info_struct_dump(e->ics_metadata, stream);
   parser_struct_dump(e->parameter_file, stream);
   output_options_struct_dump(e->output_options, stream);
+  if (e->output_list_density_grids) output_list_struct_dump(e->output_list_density_grids, stream);
 
 #ifdef WITH_CSDS
   if (e->policy & engine_policy_csds) {
     csds_struct_dump(e->csds, stream);
   }
 #endif
+
+  if (e->output_list_density_grids) {
+    struct output_list *output_list_density_grids =
+        (struct output_list *)malloc(sizeof(struct output_list));
+    output_list_struct_restore(output_list_density_grids, stream);
+    e->output_list_density_grids = output_list_density_grids;
+  }
+
 }
 
 /**
