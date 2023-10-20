@@ -221,6 +221,9 @@ struct vr_return_data {
 int InitVelociraptor(char *config_name, struct unitinfo unit_info,
                      struct siminfo sim_info, const int numthreads);
 
+int InitVelociraptorExtra(const int i, char *config_name, struct unitinfo unit_info,
+                  struct siminfo sim_info, const int numthreads);
+
 struct vr_return_data InvokeVelociraptor(
     const int snapnum, char *output_name, struct cosmoinfo cosmo_info,
     struct siminfo sim_info, const size_t num_gravity_parts,
@@ -403,6 +406,10 @@ void velociraptor_init(struct engine *e) {
     sim_info.izoomsim = 0;
   }
 
+  #ifdef VR_NOMASS
+  sim_info.mass_uniform_box = gravity_get_mass(&gparts[0]);
+  #endif
+
   /* Tell VELOCIraptor what we have in the simulation */
   sim_info.idarkmatter = (e->total_nr_gparts - e->total_nr_parts > 0);
   sim_info.igas = (e->policy & engine_policy_hydro);
@@ -425,12 +432,28 @@ void velociraptor_init(struct engine *e) {
     message("VELOCIraptor conf: Config file name: %s", e->stf_config_file_name);
     message("VELOCIraptor conf: Cosmological Simulation: %d",
             sim_info.icosmologicalsim);
+
+    message("VELOCIraptor conf: Config file name: %s", e->stf_config_file_name);
+    if (e->num_extra_stf_outputs) {
+      message("Multiple VR invocations with different snapshot candence and different configs requested");
+        for (int i=0;i<e->num_extra_stf_outputs;i++) {
+            message("VELOCIraptor conf for extra output %d: Config file name: %s",i+1,e->stf_config_file_name_extra[i]);
+        }
+    }
+
   }
 
   /* Initialise VELOCIraptor. */
   if (InitVelociraptor(e->stf_config_file_name, unit_info, sim_info,
                        e->nr_threads) != 1)
     error("VELOCIraptor initialisation failed.");
+  if (e->num_extra_stf_outputs) {
+      for (int i=0;i<e->num_extra_stf_outputs;i++) {
+          if (InitVelociraptorExtra(i, e->stf_config_file_name_extra[i], unit_info, sim_info, e->nr_threads) != 1) {
+              error("VELOCIraptor initialisation for extra output %d with config %s failed.",i+1,e->stf_config_file_name_extra[i]);
+          }
+      }
+  }
 
   if (e->verbose)
     message("took %.3f %s.", clocks_from_ticks(getticks() - tic),
@@ -725,6 +748,8 @@ void velociraptor_dump_orphan_particles(struct engine *e,
  *
  * @param e The #engine.
  * @param linked_with_snap Are we running at the same time as a snapshot dump?
+ * note that if linked_with_snap < 0, this indicates that the invoke has been
+ * called from the extra velociraptor dumps for extra dump listed in -linked_with_snap-1
  */
 void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
 
@@ -960,6 +985,19 @@ void velociraptor_invoke(struct engine *e, const int linked_with_snap) {
   } else {
     /* Not making separate directories so subDirName=outputDirName */
     strncpy(subDirName, outputDirName, FILENAME_BUFFER_SIZE);
+  }
+
+  /* What is the snapshot number? */
+  int snapnum;
+  if (linked_with_snap > 0) {
+    snapnum = e->snapshot_output_count;
+  }
+  else if (linked_with_snap == 0) {
+    snapnum = e->stf_output_count;
+  }
+  else if (linked_with_snap < 0) {
+    iextraoutput = -linked_with_snap - 1;
+    snapnum = e->stf_output_count_extra[iextraoutput];
   }
 
   /* What should the filename be? */
