@@ -31,6 +31,7 @@
 #include "engine.h"
 
 /* Local headers. */
+#include "darkmatter_write_grids.h"
 #include "active.h"
 #include "csds_io.h"
 #include "distributed_io.h"
@@ -413,6 +414,10 @@ void engine_io(struct engine *e) {
   const int with_los = (e->policy & engine_policy_line_of_sight);
   const int with_fof = (e->policy & engine_policy_fof);
   const int with_power = (e->policy & engine_policy_power_spectra);
+  const int with_density_grids = (e->policy & engine_policy_produce_density_grids);
+#ifdef HAVE_VELOCIRAPTOR
+  int iextra = -1;
+#endif
 
   /* What kind of output are we getting? */
   enum output_type {
@@ -421,7 +426,9 @@ void engine_io(struct engine *e) {
     output_statistics,
     output_ps,
     output_stf,
+    output_stf_extra,
     output_los,
+    output_density_grids
   };
 
   /* What kind of output do we want? And at which time ?
@@ -463,6 +470,21 @@ void engine_io(struct engine *e) {
         type = output_stf;
       }
     }
+
+    if (e->num_extra_stf_outputs) {
+      for (int i = 0; i < e->num_extra_stf_outputs; i++) {
+        if (e->ti_end_min > e->ti_next_stf_extra[i] && e->ti_next_stf_extra[i] > 0) {
+          if (e->ti_next_stf_extra[i] < ti_output) {
+             ti_output = e->ti_next_stf_extra[i];
+#ifdef HAVE_VELOCIRAPTOR
+          iextra = i;
+#endif
+          type = output_stf_extra;
+          break;
+          }
+        }
+      }
+    }
   }
 
   /* Do we want to write a line of sight file? */
@@ -471,6 +493,16 @@ void engine_io(struct engine *e) {
       if (e->ti_next_los < ti_output) {
         ti_output = e->ti_next_los;
         type = output_los;
+      }
+    }
+  }
+
+  /* Do we want to produce a density grid? */
+  if (with_density_grids) {
+      if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
+        if (e->ti_next_density_grids < ti_output) {
+          ti_output = e->ti_next_density_grids;
+          type = output_density_grids;
       }
     }
   }
@@ -587,6 +619,10 @@ void engine_io(struct engine *e) {
           velociraptor_invoke(e, /*linked_with_snap=*/0);
           e->step_props |= engine_step_prop_stf;
         }
+        
+        if (with_density_grids && e->stf_dump_grids) {
+            engine_dump_density_grids(e);
+        }
 
         /* Reallocate freed memory */
         if ((e->policy & engine_policy_self_gravity) && e->s->periodic)
@@ -603,6 +639,21 @@ void engine_io(struct engine *e) {
             "the interface!");
 #endif
         break;
+        
+      case output_stf_extra:
+
+#ifdef HAVE_VELOCIRAPTOR
+      /* Unleash the raptor! */
+      velociraptor_invoke(e, -iextra-1);
+      e->step_props |= engine_step_prop_stf;
+      /* ... and find the next output time */
+      engine_compute_next_stf_time_extra_outputs(e);
+#else
+      error(
+            "Asking for a VELOCIraptor output but SWIFT was compiled without "
+            "the interface!");
+#endif
+      break;
 
       case output_los:
 
@@ -612,6 +663,14 @@ void engine_io(struct engine *e) {
         /* Move on */
         engine_compute_next_los_time(e);
 
+        break;
+      
+      case output_density_grids:
+
+        engine_dump_density_grids(e);
+        e->step_props |= engine_step_prop_density_field;
+        // ... and find the next output time
+        engine_compute_next_density_grids_time(e);
         break;
 
       case output_ps:
@@ -674,6 +733,16 @@ void engine_io(struct engine *e) {
         if (e->ti_next_los < ti_output) {
           ti_output = e->ti_next_los;
           type = output_los;
+        }
+      }
+    }
+
+    /* Do we want to produce a density grid? */
+    if (with_density_grids) {
+        if (e->ti_end_min > e->ti_next_density_grids && e->ti_next_density_grids > 0) {
+          if (e->ti_next_density_grids < ti_output) {
+            ti_output = e->ti_next_density_grids;
+            type = output_density_grids;
         }
       }
     }
@@ -1012,6 +1081,143 @@ void engine_compute_next_stf_time(struct engine *e) {
 }
 
 /**
+ * @brief Computes the next time (on the time line) for structure finding
+ * of the extra request stf dumps if any.
+ * @param e The #engine.
+ */
+void engine_compute_next_stf_time_extra_outputs(struct engine *e) {
+    if (e->num_extra_stf_outputs<1) {
+        return;
+    }
+    for (int i=0;i<e->num_extra_stf_outputs; i++) {
+      /* Do output_list file case */
+      if (e->output_list_stf_extra[i]) {
+        output_list_read_next_time(e->output_list_stf_extra[i], e, "stf_extra", &e->ti_next_stf_extra[i]);
+        continue;
+      }
+
+      /* Find upper-bound on last output */
+      double time_end;
+      if (e->policy & engine_policy_cosmology)
+        time_end = e->cosmology->a_end * e->delta_time_stf_extra[i];
+      else
+        time_end = e->time_end + e->delta_time_stf_extra[i];
+
+      /* Find next snasphot above current time */
+      double time;
+      if (e->policy & engine_policy_cosmology)
+        time = e->a_first_stf_output_extra[i];
+      else
+        time = e->time_first_stf_output_extra[i];
+
+      int found_stf_time = 0;
+      while (time < time_end) {
+
+        /* Output time on the integer timeline */
+        if (e->policy & engine_policy_cosmology)
+          e->ti_next_stf_extra[i] = log(time / e->cosmology->a_begin) / e->time_base;
+        else
+          e->ti_next_stf_extra[i] = (time - e->time_begin) / e->time_base;
+
+        /* Found it? */
+        if (e->ti_next_stf_extra[i] > e->ti_current) {
+          found_stf_time = 1;
+          break;
+        }
+
+        if (e->policy & engine_policy_cosmology)
+          time *= e->delta_time_stf_extra[i];
+        else
+          time += e->delta_time_stf_extra[i];
+      }
+
+      /* Deal with last snapshot */
+      if (!found_stf_time) {
+        e->ti_next_stf_extra[i] = -1;
+        if (e->verbose) message("No further output time.");
+      } else {
+
+        /* Be nice, talk... */
+        if (e->policy & engine_policy_cosmology) {
+          const float next_stf_time =
+              exp(e->ti_next_stf_extra[i] * e->time_base) * e->cosmology->a_begin;
+          if (e->verbose)
+            message("Next VELOCIraptor time for extra output set %d is set to a=%e.", i, next_stf_time);
+        } else {
+          const float next_stf_time = e->ti_next_stf_extra[i] * e->time_base + e->time_begin;
+          if (e->verbose)
+            message("Next VELOCIraptor time for extra output set %d set to t=%e.", i, next_stf_time);
+        }
+      }
+  }
+}
+
+/**
+ * @brief Computes the next time (on the time line) for computing density grid
+ *
+ * @param e The #engine.
+ */
+void engine_compute_next_density_grids_time(struct engine *e) {
+  /* Do output_list file case */
+  if (e->output_list_density_grids) {
+    output_list_read_next_time(e->output_list_density_grids, e, "density", &e->ti_next_density_grids);
+    return;
+  }
+  /* Find upper-bound on last output */
+  double time_end;
+  if (e->policy & engine_policy_cosmology)
+    time_end = e->cosmology->a_end * e->delta_time_density_grids;
+  else
+    time_end = e->time_end + e->delta_time_density_grids;
+
+  /* Find next snasphot above current time */
+  double time;
+  if (e->policy & engine_policy_cosmology)
+    time = e->a_first_density_grids_output;
+  else
+    time = e->time_first_density_grids_output;
+
+  int found_density_grids_time = 0;
+  while (time < time_end) {
+
+    /* Output time on the integer timeline */
+    if (e->policy & engine_policy_cosmology)
+      e->ti_next_density_grids = log(time / e->cosmology->a_begin) / e->time_base;
+    else
+      e->ti_next_density_grids = (time - e->time_begin) / e->time_base;
+
+    /* Found it? */
+    if (e->ti_next_density_grids > e->ti_current) {
+      found_density_grids_time = 1;
+      break;
+    }
+
+    if (e->policy & engine_policy_cosmology)
+      time *= e->delta_time_density_grids;
+    else
+      time += e->delta_time_density_grids;
+  }
+  /* Deal with last snapshot */
+  if (!found_density_grids_time) {
+    e->ti_next_density_grids = -1;
+    if (e->verbose) message("No further output time.");
+  } else {
+
+    /* Be nice, talk... */
+    if (e->policy & engine_policy_cosmology) {
+      const float next_density_grids_time =
+          exp(e->ti_next_density_grids * e->time_base) * e->cosmology->a_begin;
+      if (e->verbose)
+        message("Next Density grids time set to a=%e.", next_density_grids_time);
+    } else {
+      const float next_density_grids_time = e->ti_next_density_grids * e->time_base + e->time_begin;
+      if (e->verbose)
+        message("Next Density grids time set to t=%e.", next_density_grids_time);
+    }
+  }
+}
+
+/**
  * @brief Computes the next time (on the time line) for FoF black holes seeding
  *
  * @param e The #engine.
@@ -1208,6 +1414,23 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params,
     }
   }
 
+  /* Deal with stf extra output lists */
+  if (e->num_extra_stf_outputs) {
+      for (int i=0;i<e->num_extra_stf_outputs;i++) {
+          e->output_list_stf_extra[i] = NULL;
+          sprintf(outlistname,"StructureFinding_Extra_%d",i);
+          output_list_init(&e->output_list_stf_extra[i], e, outlistname,
+                           &e->delta_time_stf_extra[i], &stf_time_first);
+
+          if (e->output_list_stf_extra[i]) {
+            if (e->policy & engine_policy_cosmology)
+              e->a_first_stf_output_extra[i] = stf_time_first;
+            else
+              e->time_first_stf_output_extra[i] = stf_time_first;
+          }
+      }
+    }
+
   /* Deal with line of sight */
   if (e->policy & engine_policy_line_of_sight) {
 
@@ -1241,6 +1464,135 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params,
         e->time_first_ps_output = e->ti_next_ps * e->time_base + e->time_begin;
     }
   }
+  
+  /* Deal with denisty grids */
+  double density_grids_time_first;
+  e->output_list_density_grids = NULL;
+  output_list_init(&e->output_list_density_grids, e, "DensityGrids",
+                   &e->delta_time_density_grids, &density_grids_time_first);
+  if (e->output_list_density_grids) {
+    if (e->policy & engine_policy_cosmology)
+      e->a_first_density_grids_output = density_grids_time_first;
+    else
+      e->time_first_density_grids_output = density_grids_time_first;
+     }
+  }
+
+}
+
+/**
+ * @brief Writes density grids with the current state of the engine
+ *
+ * @param e The #engine.
+ */
+void engine_dump_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot
+   *
+   * shot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+  if (strnlen(e->density_grids_subdir, PARSER_MAX_LINE_SIZE) > 0) {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s/%s",
+                 e->density_grids_subdir,
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error(
+          "FILENAME_BUFFER_SIZE is too small for density grids path and file name");
+    }
+    /* Try to ensure the directory exists */
+    if (engine_rank == 0) io_make_snapshot_subdir(e->density_grids_subdir);
+#ifdef WITH_MPI
+    MPI_Barrier(MPI_COMM_WORLD);
+#endif
+  } else {
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s",
+                 e->density_grids_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+  }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  /* Flag that we dumped a grids */
+  e->step_props |= engine_step_prop_density_field;
+  e->density_field_this_timestep = 1;
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
+}
+
+/**
+ * @brief Writes density grids with the current state of the engine when structure finding
+ * invoked
+ *
+ * @param e The #engine.
+ */
+void engine_dump_stf_density_grids(struct engine *e) {
+
+  struct clocks_time time1, time2;
+  clocks_gettime(&time1);
+
+  if (e->verbose) {
+    if (e->policy & engine_policy_cosmology)
+      message("Dumping structure finding related grids at a=%e",
+              exp(e->ti_current * e->time_base) * e->cosmology->a_begin);
+    else
+      message("Dumping structure finding related grids at t=%e",
+              e->ti_current * e->time_base + e->time_begin);
+  }
+
+  /* Determine snapshot location */
+  char densitygridBase[FILENAME_BUFFER_SIZE];
+    if (snprintf(densitygridBase, FILENAME_BUFFER_SIZE, "%s.den",
+                 e->stf_base_name) >= FILENAME_BUFFER_SIZE) {
+      error("FILENAME_BUFFER_SIZE is too small for density grids file name");
+    }
+
+/* Dump... */
+#if defined(HAVE_HDF5)
+#if defined(WITH_MPI)
+#if defined(HAVE_PARALLEL_HDF5)
+  write_stf_grids_parallel(e, densitygridBase, e->internal_units, e->snapshot_units,
+                        e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#else
+  write_stf_grids_serial(e, densitygridBase, e->internal_units, e->snapshot_units,
+                      e->nodeID, e->nr_nodes, MPI_COMM_WORLD, MPI_INFO_NULL);
+#endif
+#else
+  write_stf_grids_single(e, densitygridBase, e->internal_units, e->snapshot_units);
+#endif
+#endif
+
+  clocks_gettime(&time2);
+  if (e->verbose)
+    message("writing grids properties took %.3f %s.",
+            (float)clocks_diff(&time1, &time2), clocks_getunit());
 }
 
 /**
