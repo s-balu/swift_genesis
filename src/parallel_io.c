@@ -40,6 +40,7 @@
 #include "black_holes_io.h"
 #include "chemistry_io.h"
 #include "common_io.h"
+#include "darkmatter_write_grids.h"
 #include "dimension.h"
 #include "engine.h"
 #include "error.h"
@@ -1807,6 +1808,10 @@ void write_output_parallel(struct engine* e,
           /* Select the fields to write */
           io_select_dm_fields(gparts, e->s->gpart_group_data, with_fof,
                               with_stf, e, &num_fields, list);
+
+         if (e->snapshot_dump_grids)
+            darkmatter_write_grids(e, Ndm_written, h_file, internal_units,
+                              snapshot_units, e->snapshot_grid_dim, e->snapshot_grid_method);
 
         } else {
 
