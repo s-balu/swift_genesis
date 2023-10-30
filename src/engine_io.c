@@ -1418,7 +1418,7 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params,
   if (e->num_extra_stf_outputs) {
       for (int i=0;i<e->num_extra_stf_outputs;i++) {
           e->output_list_stf_extra[i] = NULL;
-          sprintf(outlistname,"StructureFinding_Extra_%d",i);
+          //sprintf(outlistname,"StructureFinding_Extra_%d",i);
           output_list_init(&e->output_list_stf_extra[i], e, outlistname,
                            &e->delta_time_stf_extra[i], &stf_time_first);
 
