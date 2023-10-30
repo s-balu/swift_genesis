@@ -616,7 +616,7 @@ void prepare_density_grids_file(struct engine* e, const char* baseName, long lon
     if (iproducexmf) {
       /* Add the global information for that particle type to
        * the XMF meta-file */
-      xmf_write_groupheader(xmfFile, fileName, N_total[ptype],
+      xmf_write_groupheader(xmfFile, fileName, /*distributed=*/0, N_total[ptype],
                           (enum part_type)ptype);
     }
 

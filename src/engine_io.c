@@ -1414,22 +1414,23 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params,
     }
   }
 
-  /* Deal with stf extra output lists */
-  if (e->num_extra_stf_outputs) {
-      for (int i=0;i<e->num_extra_stf_outputs;i++) {
-          e->output_list_stf_extra[i] = NULL;
-          //sprintf(outlistname,"StructureFinding_Extra_%d",i);
-          output_list_init(&e->output_list_stf_extra[i], e, outlistname,
-                           &e->delta_time_stf_extra[i], &stf_time_first);
-
-          if (e->output_list_stf_extra[i]) {
-            if (e->policy & engine_policy_cosmology)
-              e->a_first_stf_output_extra[i] = stf_time_first;
-            else
-              e->time_first_stf_output_extra[i] = stf_time_first;
-          }
-      }
-    }
+//  /* Deal with stf extra output lists */
+//    
+//  if (e->num_extra_stf_outputs) {
+//      for (int i=0;i<e->num_extra_stf_outputs;i++) {
+//          e->output_list_stf_extra[i] = NULL;
+//          sprintf(outlistname,"StructureFinding_Extra_%d",i);
+//          output_list_init(&e->output_list_stf_extra[i], e, outlistname,
+//                           &e->delta_time_stf_extra[i], &stf_time_first);
+//
+//          if (e->output_list_stf_extra[i]) {
+//            if (e->policy & engine_policy_cosmology)
+//              e->a_first_stf_output_extra[i] = stf_time_first;
+//            else
+//              e->time_first_stf_output_extra[i] = stf_time_first;
+//          }
+//      }
+//    }
 
   /* Deal with line of sight */
   if (e->policy & engine_policy_line_of_sight) {
@@ -1465,17 +1466,23 @@ void engine_init_output_lists(struct engine *e, struct swift_params *params,
     }
   }
   
-  /* Deal with denisty grids */
-  double density_grids_time_first;
-  e->output_list_density_grids = NULL;
-  output_list_init(&e->output_list_density_grids, e, "DensityGrids",
-                   &e->delta_time_density_grids, &density_grids_time_first);
-  if (e->output_list_density_grids) {
-    if (e->policy & engine_policy_cosmology)
-      e->a_first_density_grids_output = density_grids_time_first;
-    else
-      e->time_first_density_grids_output = density_grids_time_first;
-     }
+  /* Deal with density grids */
+  if (e->policy & engine_policy_produce_density_grids) {
+      
+      e->output_list_density_grids = NULL;
+      output_list_init(&e->output_list_density_grids, e, "DensityGrids",
+                       &e->delta_time_density_grids);
+      
+      if (e->output_list_density_grids) {
+          engine_compute_next_density_grids_time(e);
+          
+          if (e->policy & engine_policy_cosmology)
+              e->a_first_density_grids_output =
+              exp(e->ti_next_density_grids * e->time_base) * e->cosmology->a_begin;
+          else
+              e->time_first_density_grids_output =
+              e->ti_next_density_grids * e->time_base + e->time_begin;
+      }
   }
 
 }
